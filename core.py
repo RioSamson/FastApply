@@ -72,11 +72,11 @@ def demographic(label):
     return bool(re.search(r'gender|ethnic|race|hispanic|latino|veteran|military|disabil|sexual|pronoun',label,re.I))
 
 def learnable(label):
-    if demographic(label) or answer_key(label) in {'select', 'search', 'textbox', 'combobox', 'choose'}:
+    if answer_key(label) in {'select', 'search', 'textbox', 'combobox', 'choose'}:
         return False
     if LEGAL.search(label) or re.search(r'password|verification|one time|security code|social security|\bssn\b|passport|bank|tax id|pin code|secret|credential|birth|religion',label,re.I):
         return False
-    return not SENSITIVE.search(label) or answer_key(label)=='are you at least 18 years old'
+    return demographic(label) or not SENSITIVE.search(label) or answer_key(label)=='are you at least 18 years old'
 
 def preferred_location(location, preferences):
     text=str(location).casefold()
@@ -102,9 +102,13 @@ def plan(fields,profile,country=None):
         if f.get('groupAnswered'):continue
         if f['value']:continue
         if LEGAL.search(label) or LEGAL.search(question):missing.append(label+': review and act yourself');continue
-        # Explicit reusable answer matching; sensitive answers require a matching stated country.
+        # An individually approved response takes precedence over the general blank preference.
         answer=profile.get('answers',{}).get(answer_key(question))
-        if isinstance(answer,dict) and answer.get('value') is not None:
+        if demographic(question):
+            if not isinstance(answer,dict) or answer.get('demographic_approved') is not True:
+                continue
+            value=answer.get('value')
+        elif isinstance(answer,dict) and answer.get('value') is not None:
             if answer_key(question)=='are you at least 18 years old' or not SENSITIVE.search(question) or (country and answer.get('country')==country):value=answer['value']
         if value is None and country:
             wa=profile.get('work_authorization',{}).get(country,{})
@@ -117,7 +121,6 @@ def plan(fields,profile,country=None):
         if group and n in ('start date','end date'):
             rows=profile.get(group,[]);index=max(0,f.get('sectionIndex',0))
             if index<len(rows):value=rows[index].get(n.replace(' ','_'))
-        if demographic(question) and profile.get('demographics',{}).get('preference','leave_unanswered')=='leave_unanswered':continue
         if value is None and not SENSITIVE.search(label):
             value=getpath(profile,ALIASES.get(n,''))
             section=norm(f.get('section',''))

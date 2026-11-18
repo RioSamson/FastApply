@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Single-user local application. Python 3.10+, no third-party dependencies."""
 import argparse, json, os, pathlib, secrets, threading, time, urllib.parse, urllib.request, http.server, signal, sys, fcntl
-from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile, answer_key, learnable, preferred_location
+from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile, answer_key, demographic, learnable, preferred_location
 from experience import fill_experience
 from safari import Safari, SafariError
 
@@ -80,6 +80,8 @@ def scan_answers(fields):
         if key=='are you at least 18 years old' and value.strip().casefold() not in ('yes','no'):
             continue
         entry={'label':label,'value':str(value)[:4000]}
+        if demographic(label):
+            entry['demographic']=True
         if key not in candidates:candidates[key]=entry
         elif candidates[key]!=entry:candidates[key]=None
     return {key:value for key,value in candidates.items() if value is not None}
@@ -241,7 +243,11 @@ class Runner:
                 if not s:return
             for scope in (answer_scope(j),'shared'):
                 for label,saved in self.store.state.get('learned_answers',{}).get(scope,{}).items():
-                    profile.setdefault('answers',{}).setdefault(label,saved)
+                    answers=profile.setdefault('answers',{})
+                    if saved.get('demographic_approved') and not answers.get(label,{}).get('demographic_approved'):
+                        answers[label]=saved
+                    else:
+                        answers.setdefault(label,saved)
             remember_contact_fields(self.store,j,s,profile)
             if not editing:
                 for card in s.get('cards',[]):
@@ -443,7 +449,10 @@ def make_handler(store,runner,token,fixture,port):
                                 raise ValueError('Select an answer before sharing it across employers.')
                             for key,entry in shown.items():
                                 scope=reusable_scope(key,entry,share,j)
-                                learned.setdefault(scope,{})[key]={'value':entry['value']}
+                                saved={'value':entry['value']}
+                                if entry.get('demographic'):
+                                    saved['demographic_approved']=True
+                                learned.setdefault(scope,{})[key]=saved
                                 if scope=='shared':
                                     learned.get(answer_scope(j),{}).pop(key,None)
                             store.save()
