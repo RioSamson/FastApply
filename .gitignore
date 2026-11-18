@@ -1,0 +1,17 @@
+/private/
+/outputs/
+/live-verification.json
+/verification-results.json
+/profile.json
+/state.json
+/launch.json
+/review-thread
+.env
+.env.*
+*.pem
+*.key
+*.pdf
+*.docx
+__pycache__/
+*.py[cod]
+.DS_Store

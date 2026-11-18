@@ -1,0 +1,71 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>FastApply · Safari workspace</title>
+<style>
+:root{font:16px -apple-system,BlinkMacSystemFont,sans-serif;color:#193b33;background:#f3f5f1}body{max-width:1180px;margin:35px auto;padding:0 25px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:34px;margin:8px 0}h2{font-size:21px}.muted,small{color:#536a62}.banner{background:#dce9c5;border-left:4px solid #52783e;padding:15px 20px;margin:24px 0}section{background:white;border:1px solid #d8e0d9;border-radius:12px;padding:24px;margin:20px 0}textarea,input,select{font:inherit;padding:10px;border:1px solid #abbdb2;border-radius:6px;box-sizing:border-box}textarea{width:100%;min-height:180px;resize:vertical}button{background:#245d49;color:white;border:0;border-radius:6px;padding:11px 15px;font:inherit;cursor:pointer;margin:6px 7px 6px 0}button.secondary{background:#e9eee7;color:#254b3d}button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible{outline:3px solid #cc9818}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #e3e8e1;vertical-align:top}td small{display:block;margin-top:5px}a{color:#27634a;overflow-wrap:anywhere}.pill{font-size:13px;background:#edf0e8;padding:5px 9px;display:inline-block;border-radius:20px;white-space:nowrap}.ready{background:#d8ebc6}.needs{background:#ffedc9}details{margin:12px 0}summary{cursor:pointer}pre{white-space:pre-wrap}#message{position:sticky;top:0;z-index:2;background:#203f35;color:white;padding:12px;display:none}#profile{font:13px ui-monospace,monospace;min-height:360px}#jobs{overflow:auto}.actions{min-width:190px}.actions button{font-size:13px;padding:7px}.stats{font-size:14px} .country{width:110px;font-size:13px} @media(max-width:700px){body{padding:0 12px}header{display:block}section{padding:16px}th:nth-child(3){min-width:200px}}</style>
+<header><div><small>LOCAL WORKSPACE / SAFARI</small><h1>FastApply</h1><p class="muted">Your job search, one application at a time.</p></div><span id="mode" class="pill">Paused</span></header>
+<div class="banner"><strong>You review and submit every application.</strong> This helper fills supported fields in ordinary Safari tabs. It never clicks final submission or accepts legal terms. Employer pages may autosave entered data.</div><div id="message" role="status"></div>
+<section><h2>1. Your profile & resume</h2><details id="profile-section"><summary>Edit saved local profile</summary><p>Use null for unknown values. Put the absolute path to your PDF/DOCX in <code>resume_path</code>. Text values must use double quotes: <code>"first_name": "Alex"</code>. Education and employment contain objects; skills contain quoted strings. Saving writes to the local file below and persists between launches. No credentials belong here.</p><small id="profile-path"></small><textarea id="profile" aria-label="Profile JSON" spellcheck="false"></textarea><button id="save-profile">Save profile</button><button class="secondary" id="check-resume">Validate resume</button></details></section>
+<section><h2>2. Paste your SWElist email</h2><textarea id="email" placeholder="Paste directly from your email or webpage — links are kept automatically…" aria-label="Email content"></textarea><button id="preview">Preview jobs</button><button class="secondary" id="sample">Load sample jobs</button><button class="secondary" id="demo">Load local fixtures</button><div id="preview-result"></div><button id="start" disabled>Start batch</button><small>All parsed jobs are included. No filtering by fit or location.</small></section>
+<section><header><h2>3. Application workspace</h2><span class="stats" id="stats"></span></header><button class="secondary" data-mode="paused">Pause</button><button data-mode="running">Resume queue</button><button class="secondary" data-mode="cancelled">Cancel queue</button><p class="muted">Pause/cancel takes effect between operations. Forms remain open. Resume job after handling login, questions, or an intermediate step. Existing values are preserved.</p><div id="jobs"></div></section>
+<script>
+const $=s=>document.querySelector(s),token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('jobprep-token');if(token)sessionStorage.setItem('jobprep-token',token);history.replaceState(null,'',location.pathname);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function message(s){$('#message').style.display='block';$('#message').textContent=s;}
+async function api(path,body){const r=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers:{'X-JobPrep-Token':token,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const v=await r.json();if(!r.ok)throw Error(v.error);return v}
+const act=f=>async()=>{try{await f()}catch(e){message(e.message)}};
+// Read both clipboard representations during the user's paste gesture.
+// Parse HTML in an inert template: never insert clipboard HTML into the live page.
+function emailClipboardText(html, plain) {
+  if (!html) return plain;
+  const template=document.createElement('template');
+  template.innerHTML=html;
+  template.content.querySelectorAll('script,style,noscript,iframe,object,embed,img,svg,link,meta').forEach(e=>e.remove());
+  let links=0;
+  const blocks=new Set(['P','DIV','LI','TR','TABLE','UL','OL','BLOCKQUOTE','H1','H2','H3','H4','SECTION','ARTICLE']);
+  function walk(node) {
+    if(node.nodeType===Node.TEXT_NODE) return node.textContent;
+    if(node.nodeType!==Node.ELEMENT_NODE && node.nodeType!==Node.DOCUMENT_FRAGMENT_NODE)return '';
+    if(node.nodeName==='BR')return '\n';
+    const text=[...node.childNodes].map(walk).join('');
+    if(node.nodeName==='A') {
+      const href=node.getAttribute('href')||'';
+      try {
+        const url=new URL(href);
+        if(['https:','http:'].includes(url.protocol)) {
+          links++;
+          const label=text.replace(/\s+/g,' ').trim().replace(/[\[\]]/g,'');
+          const target=url.href.replace(/\(/g,'%28').replace(/\)/g,'%29');
+          return '['+(label||url.hostname)+']('+target+')';
+        }
+      } catch {}
+    }
+    if(node.nodeName==='TD'||node.nodeName==='TH')return text+' | ';
+    return blocks.has(node.nodeName)?'\n'+text+'\n':text;
+  }
+  const converted=walk(template.content).replace(/\u00a0/g,' ').replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();
+  return links ? converted : plain;
+}
+$('#email').addEventListener('paste',event=>{
+  const clipboard=event.clipboardData;
+  if(!clipboard)return;
+  const plain=clipboard.getData('text/plain');
+  const html=clipboard.getData('text/html');
+  if(!html)return; // Native plain-text/Markdown paste already preserves literal URLs.
+  const text=emailClipboardText(html,plain);
+  if(!text)return;
+  event.preventDefault();
+  const input=event.currentTarget;
+  input.setRangeText(text,input.selectionStart,input.selectionEnd,'end');
+  input.dispatchEvent(new Event('input',{bubbles:true}));
+});
+
+let previewText='';$('#email').oninput=()=>{$('#start').disabled=true};
+$('#preview').onclick=act(async()=>{const p=await api('parse',{text:$('#email').value});previewText=$('#email').value;$('#preview-result').innerHTML='<p>'+p.jobs.length+' jobs · '+esc(p.warnings.join(' '))+'</p><ol>'+p.jobs.map(j=>'<li>'+esc(j.company)+' — <a target="_blank" rel="noreferrer" href="'+esc(j.original_url)+'">'+esc(j.title)+'</a></li>').join('')+'</ol>';$('#start').disabled=!p.jobs.length});
+$('#sample').onclick=act(async()=>{$('#email').value=(await api('sample')).text;$('#start').disabled=true;await $('#preview').onclick()});
+$('#demo').onclick=act(async()=>{$('#email').value=(await api('demo')).text;$('#start').disabled=true;await $('#preview').onclick();message('Fixtures require launch with --fixtures and a synthetic profile. See README.')});
+$('#start').onclick=act(async()=>{if(previewText!==$('#email').value)throw Error('Preview the edited email first');const r=await api('start',{text:previewText});message(r.added+' jobs queued; '+r.previously_prepared+' previously prepared/known jobs kept without duplicate tabs.');await refresh()});
+$('#save-profile').onclick=act(async()=>{let profile;try{profile=JSON.parse($('#profile').value)}catch(e){throw Error('Invalid JSON. Put double quotes around text, URLs, file paths, and each skill. Education/employment need objects. '+e.message)}await api('profile',{profile});message('Profile saved to your local profile.json. It will be loaded the next time you launch FastApply.')});
+$('#check-resume').onclick=act(async()=>{const r=await api('resume-check',{});message('Validated '+r.name+' ('+r.mime+'). Upload acceptance is checked separately on each application.')});
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=act(async()=>{await api('control',{mode:b.dataset.mode});await refresh()}));
+let last='';async function refresh(){const s=await api('state');$('#mode').textContent=s.mode;$('#stats').textContent=s.jobs.filter(j=>j.status==='Ready for review').length+' ready / '+s.jobs.length+' total';const serialized=JSON.stringify(s.jobs);if(serialized===last)return;last=serialized;$('#jobs').innerHTML=s.jobs.length?'<table><thead><tr><th>Job</th><th>Status</th><th>Review notes</th><th>Actions</th></tr></thead><tbody>'+s.jobs.map(j=>`<tr><td><strong>${esc(j.company)}</strong><small>${esc(j.title)}</small><small><a target="_blank" rel="noreferrer" href="${esc(j.original_url)}">Listing</a></small>${j.final_url?'<small>Employer: '+esc(new URL(j.final_url).hostname)+'</small>':''}</td><td><span class="pill ${j.status==='Ready for review'?'ready':j.status==='Needs input'?'needs':''}">${esc(j.status)}</span>${j.manual?'<small>Manually marked '+esc(j.manual)+'</small>':''}</td><td>${j.filled.length?'<details><summary>'+j.filled.length+' filled fields</summary>'+j.filled.map(esc).join('<br>')+'</details>':''}${[...j.missing,...j.concerns].map(x=>'<p>'+esc(x)+'</p>').join('')||'<small>Pending preparation or your final review.</small>'}</td><td class="actions"><button data-id="${j.id}" data-action="focus">Focus Safari</button><button data-id="${j.id}" data-action="resume">Resume job</button><details><summary>More actions</summary><label>Job country (explicit)<input class="country" placeholder="e.g. CA" value="${esc(j.country||'')}" data-country="${j.id}"></label><button data-id="${j.id}" data-action="reopen">Reopen closed window</button><button data-id="${j.id}" data-action="submitted">Mark submitted</button><button data-id="${j.id}" data-action="skipped">Mark skipped</button></details></td></tr>`).join('')+'</tbody></table>':'<p class="muted">Your batch will appear here.</p>';document.querySelectorAll('[data-action]').forEach(b=>b.onclick=act(async()=>{if(b.dataset.action==='reopen'&&!confirm('Create a new window? Only do this if the saved application window is closed.'))return;await api('job',{id:b.dataset.id,action:b.dataset.action,country:document.querySelector('[data-country="'+b.dataset.id+'"]').value});await refresh()}));}
+(async()=>{try{const p=await api('profile');$('#profile').value=JSON.stringify(p.profile,null,2);$('#profile-path').textContent=p.path;await refresh()}catch(e){message(e.message)}})();setInterval(()=>refresh().catch(e=>message(e.message)),2000);
+</script></html>
