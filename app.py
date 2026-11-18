@@ -161,7 +161,7 @@ class Runner:
                 self.js(j,'entry',{'url':s['url']})
                 time.sleep(1)
                 continue
-            if s['fields']:break
+            if s['fields'] or s.get('cards') or '/apply/section/' in s['url']:break
             candidates=[l for l in s['links'] if __import__('re').fullmatch(r'apply(?: here| now| for (?:this )?(?:job|position)| on (?:company|employer)(?: website)?)?|apply externally',l['text'],__import__('re').I) and safe_url(l['url'],self.fixture)]
             candidates=list({l['url']:l for l in candidates}.values())
             if len(candidates)!=1:
@@ -185,7 +185,10 @@ class Runner:
         if profile.get('availability',{}).get('start_date'):
             profile.setdefault('answers',{}).setdefault('when would you be available to start',{'value':profile['availability']['start_date']})
         protected=set(j.get('protected_fields',[]))
-        for step in range(8):
+        attempted_choices=set()
+        attempted_cards=set()
+        editing=None
+        for step in range(32):
             if not self.checkpoint(j):return
             s=self.snapshot(j)
             if not s:return
@@ -220,12 +223,53 @@ class Runner:
                 for label,saved in self.store.state.get('learned_answers',{}).get(scope,{}).items():
                     profile.setdefault('answers',{}).setdefault(label,saved)
             remember_contact_fields(self.store,j,s,profile)
-            p=plan([f for f in s['fields'] if signature(f) not in protected],profile,j.get('country'))
+            if not editing:
+                for card in s.get('cards',[]):
+                    if card['id'] in attempted_cards:continue
+                    attempted_cards.add(card['id'])
+                    jobs=[r for r in profile.get('employment',[]) if r.get('title')==card['title'] and r.get('company')]
+                    schools=[r for r in profile.get('education',[]) if r.get('school') and card['subtitle'].startswith(r['school']+' ') and r.get('degree')]
+                    if len(jobs)==1:
+                        editing={'Employer Name':jobs[0]['company']}
+                    elif len(schools)==1:
+                        row=schools[0]
+                        degree="Bachelor's Degree" if row['degree'].lower().startswith('bachelor of ') else row['degree']
+                        editing={'Degree':degree,'Area of Study':row.get('field')}
+                    if editing:
+                        self.js(j,'edit-card',{'id':card['id']})
+                        time.sleep(.25)
+                        break
+                if editing:continue
+            p=plan([f for f in s['fields'] if not f['value'] or signature(f) not in protected],profile,j.get('country'))
+            if editing:
+                p['answers']=[{'id':f['id'],'value':editing[f['label']],'custom':f['type']=='combobox'}
+                              for f in s['fields'] if editing.get(f['label']) and not f['value']]
+                if not p['answers']:
+                    if any(f['label'] in editing for f in s['fields']) and all(not f['required'] or f['value'] for f in s['fields']):
+                        self.js(j,'save-card',{'url':s['url']})
+                        time.sleep(.25)
+                        editing=None
+                        continue
+            result=self.js(j,'fill',{'answers':[a for a in p['answers'] if not a.get('custom')]})
+            filled.extend(result['filled']);concerns.extend(result['issues'])
+            fields_by_id={f['id']:f for f in s['fields']}
             for answer in p['answers']:
-                if answer.get('custom'):
-                    cr=self.js(j,'custom-open',answer);time.sleep(.1)
-                    cr=self.js(j,'custom-select',answer);filled.extend(cr['filled']);concerns.extend(cr['issues'])
-            result=self.js(j,'fill',{'answers':[a for a in p['answers'] if not a.get('custom')]});filled.extend(result['filled']);concerns.extend(result['issues'])
+                if not answer.get('custom'):continue
+                key=(signature(fields_by_id[answer['id']]),str(answer['value']))
+                if key in attempted_choices:continue
+                attempted_choices.add(key)
+                self.js(j,'custom-open',answer)
+                for attempt in range(12):
+                    time.sleep(.2)
+                    cr=self.js(j,'custom-select',answer)
+                    if cr['filled']:break
+                filled.extend(cr['filled']);concerns.extend(cr['issues'])
+                time.sleep(.25)
+                break
+            else:
+                answer=None
+            if editing and result['filled']:continue
+            if answer is not None:continue  # Parent dropdowns can replace the remaining fields.
             upload_fields=[f for f in s['fields'] if f['type']=='file' and __import__('re').search(r'resume|\bcv\b',f['label'],__import__('re').I)]
             for f in upload_fields:
                 if not self.checkpoint(j):return
@@ -252,9 +296,13 @@ class Runner:
                     if not receipt and not f.get('attached'):missing.append(f['label']+': file selected; upload acceptance not confirmed')
             if s.get('disabledFinal'):missing.append('Employer has disabled the final action. Check required fields and validation.')
             missing.extend(s['errors'])
+            if s['final'] and any(f['label']=='E-signature' for f in s['fields']):
+                missing=[m for m in missing if m!='E-signature' and not m.startswith('E-signature:')]
+                concerns.append('Review your application and personally complete the e-signature before submitting.')
             if s.get('shadows'):missing.append('Shadow DOM controls require manual review')
             if s['frames']:missing.append('Embedded frame contents require manual review')
-            if not s['fields']:missing.append('No recognizable application fields found')
+            if s.get('cards'):missing.append('Review the education or experience entries Oracle marked for correction.')
+            if not s['fields'] and '/apply/section/' not in s['url']:missing.append('No recognizable application fields found')
             protected.update(signature(f) for f in s['fields'] if f['value'])
             self.store.update(j,protected_fields=sorted(protected))
             if not missing and s['fixture']=='multi' and s['intermediate'] and self.fixture:

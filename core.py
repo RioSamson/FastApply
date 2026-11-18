@@ -138,7 +138,14 @@ def plan(fields,profile,country=None):
                 options=[o for o in f['options'] if not o['disabled'] and (norm(str(value))==norm(o['label']) or str(value)==o['value'])]
                 if len(options)!=1:missing.append(label+': no unique matching option');continue
                 value=options[0]['value']
-            if f['type']=='combobox':answers.append({'id':f['id'],'value':value,'custom':True});continue
+            if f['type']=='combobox':
+                choice={'id':f['id'],'value':value,'custom':True}
+                address=profile.get('address',{})
+                if n in ('city','postal code') and address.get('city') and address.get('region'):
+                    locality=address['city']+', '+address['region']
+                    choice['aliases']=[locality if n=='city' else str(value)+', '+locality]
+                answers.append(choice)
+                continue
             answers.append({'id':f['id'],'value':value})
         elif f['required'] and f['type']!='file':missing.append(label+': no applicable saved answer')
     return {'answers':answers,'missing':missing}
