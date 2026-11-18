@@ -58,10 +58,31 @@ def extract(text,fixture=False):
     return {'jobs':jobs,'warnings':warnings}
 
 ALIASES={
-'first name':'first_name','given name':'first_name','last name':'last_name','family name':'last_name','full name':'name','name':'name','email':'email','email address':'email','phone':'phone','phone number':'phone','mobile phone':'phone','linkedin':'linkedin','linkedin profile':'linkedin','linkedin url':'linkedin','github':'github','github url':'github','portfolio':'portfolio','website':'portfolio','address':'address.street','street address':'address.street','address line 1':'address.street','city':'address.city','state':'address.region','province':'address.region','postal code':'address.postal_code','zip code':'address.postal_code','country':'address.country','skills':'skills'}
+'first name':'first_name','given name':'first_name','middle name':'middle_name','middle initial':'middle_initial','country of residence':'address.country','last name':'last_name','family name':'last_name','full name':'name','name':'name','email':'email','email address':'email','phone':'phone','phone number':'phone','mobile phone':'phone','linkedin':'linkedin','linkedin profile':'linkedin','linkedin url':'linkedin','github':'github','github url':'github','portfolio':'portfolio','website':'portfolio','address':'address.street','street address':'address.street','address line 1':'address.street','city':'address.city','state':'address.region','province':'address.region','postal code':'address.postal_code','zip code':'address.postal_code','country':'address.country','skills':'skills'}
 SENSITIVE=re.compile(r'authori[sz]|sponsor|citizen|visa|salary|compensation|available|availability|start date|notice period|relocat|student|veteran|disabil|gender|ethnic|race|pronoun|age|birth|sexual|nationality',re.I)
 LEGAL=re.compile(r'agree|accept|acknowledge|confirm|certify|consent|signature|declaration|terms|attest|privacy|policy',re.I)
 def norm(s):return re.sub(r'[^\w ]','',s.lower()).strip()
+def answer_key(label):
+    cleaned=norm(label)
+    if re.fullmatch(r'are you (?:(?:at least|at years|over) )?18(?: years (?:of age|old))?(?: or older)?',cleaned) and 'over' not in cleaned:
+        return 'are you at least 18 years old'
+    return cleaned
+
+def learnable(label):
+    if LEGAL.search(label) or re.search(r'password|verification|one time|security code|social security|\bssn\b|passport|bank|tax id|pin code|secret|credential|birth|religion',label,re.I):
+        return False
+    return not SENSITIVE.search(label) or answer_key(label)=='are you at least 18 years old'
+
+def preferred_location(location, preferences):
+    text=str(location).casefold()
+    patterns={'anywhere in california':r'california|\bca,? (?:us|usa)\b|, ca(?:$|,)',
+              'new york':r'new york|\bnyc\b|, ny\b','texas':r'texas|, tx\b',
+              'vancouver':r'\bvancouver\b(?!,?\s*(?:wa|washington)\b)'}
+    for rank,preference in enumerate(preferences,1):
+        if re.search(patterns.get(preference.casefold(),r'\b'+re.escape(preference.casefold())+r'\b'),text):
+            return rank,preference
+    return None
+
 def getpath(d,key):
     for k in key.split('.'):
         if not isinstance(d,dict):return None
@@ -71,13 +92,15 @@ def getpath(d,key):
 def plan(fields,profile,country=None):
     answers=[];missing=[]
     for f in fields:
-        label=f['label']; n=norm(label); value=None
+        label=f['label']; n=answer_key(label); value=None
+        question=f.get('question') or label
+        if f.get('groupAnswered'):continue
         if f['value']:continue
-        if LEGAL.search(label):missing.append(label+': review and act yourself');continue
+        if LEGAL.search(label) or LEGAL.search(question):missing.append(label+': review and act yourself');continue
         # Explicit reusable answer matching; sensitive answers require a matching stated country.
-        answer=profile.get('answers',{}).get(n)
+        answer=profile.get('answers',{}).get(answer_key(question))
         if isinstance(answer,dict) and answer.get('value') is not None:
-            if not SENSITIVE.search(label) or (country and answer.get('country')==country):value=answer['value']
+            if answer_key(question)=='are you at least 18 years old' or not SENSITIVE.search(question) or (country and answer.get('country')==country):value=answer['value']
         if value is None and country:
             wa=profile.get('work_authorization',{}).get(country,{})
             key=None
@@ -98,11 +121,18 @@ def plan(fields,profile,country=None):
                 rows=profile.get(group,[]); index=max(0,f.get('sectionIndex',0))
                 keys={'school':'school','university':'school','degree':'degree','field of study':'field','company':'company','job title':'title','start date':'start_date','end date':'end_date','description':'description'}
                 if index<len(rows) and n in keys:value=rows[index].get(keys[n])
+        if value is None and n in ('preferred location','preferred work location') and f.get('options'):
+            ranked=[(match[0],option['value']) for option in f['options'] if not option['disabled'] and option['value']
+                    if (match:=preferred_location(option['label'],profile.get('availability',{}).get('location_preferences',[])))]
+            if ranked:
+                best=min(rank for rank,_ in ranked)
+                values={option for rank,option in ranked if rank==best}
+                if len(values)==1:value=values.pop()
         if isinstance(value,list):value=', '.join(map(str,value))
         if value is not None and value!='':
             if f['type'] in ('radio','checkbox'):
                 if f['type']=='checkbox' and value is True:answers.append({'id':f['id'],'checked':True})
-                elif str(value).lower()==str(f.get('option','')).lower():answers.append({'id':f['id'],'checked':True})
+                elif str(value).lower()==str(f.get('option','')).lower() or (f['type']=='radio' and norm(str(value))==norm(label)):answers.append({'id':f['id'],'checked':True})
                 continue
             if f.get('options'):
                 options=[o for o in f['options'] if not o['disabled'] and (norm(str(value))==norm(o['label']) or str(value)==o['value'])]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Single-user local application. Python 3.10+, no third-party dependencies."""
 import argparse, json, os, pathlib, secrets, threading, time, urllib.parse, urllib.request, http.server, signal, sys, fcntl
-from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile
+from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile, answer_key, learnable, preferred_location
 from safari import Safari, SafariError
 
 ROOT=pathlib.Path(__file__).resolve().parent
@@ -57,6 +57,26 @@ def remember_contact_fields(store,job,snapshot,profile):
             profile['answers'].setdefault(label,{'value':profile[memory[label]]})
     if changed:store.save()
 
+def answer_scope(job):
+    return job['company'].casefold()+'|'+(urllib.parse.urlsplit(job.get('final_url') or '').hostname or '')
+
+def scan_answers(fields):
+    candidates={}
+    for field in fields:
+        kind=field['type']
+        label=(field.get('question') if kind=='radio' else field['label']) or ''
+        value=field.get('selectedLabel') or (field['label'] if kind=='radio' else field['value'])
+        allowed={'text','textarea','select-one','combobox','radio','url','tel','email','date','number'}
+        if not label or not field['value'] or not value or kind not in allowed or not learnable(label):
+            continue
+        key=answer_key(label)
+        if key=='are you at least 18 years old' and value.strip().casefold() not in ('yes','no'):
+            continue
+        entry={'label':label,'value':str(value)[:4000]}
+        if key not in candidates:candidates[key]=entry
+        elif candidates[key]!=entry:candidates[key]=None
+    return {key:value for key,value in candidates.items() if value is not None}
+
 class Runner:
     def __init__(self,store,fixture=False):
         self.store=store;self.browser=Safari();self.fixture=fixture
@@ -65,6 +85,7 @@ class Runner:
         return self.browser.evaluate(j['window'],ENGINE.replace('__OP__',json.dumps(op)).replace('__PAYLOAD__',json.dumps(payload or {})))
     def checkpoint(self,j):
         with self.store.lock:
+            if j not in self.store.state['jobs']:return False
             if self.store.state['mode']!='running':
                 if j['status'] in ('Opening','Filling'):self.store.update(j,status='Needs input',concerns=['Batch paused/cancelled. Use Resume job to continue in its existing window.'])
                 return False
@@ -119,7 +140,13 @@ class Runner:
             if target:
                 if s['simplify'].get('active') is False:
                     self.store.update(j,status='Unavailable',concerns=['Simplify marks this listing inactive.']);return
-                notes=['Listing location: '+str(x) for x in s['simplify'].get('locations',[])]
+                locations=s['simplify'].get('locations',[])
+                notes=['Listing location: '+str(x) for x in locations]
+                preferences=self.store.profile().get('availability',{}).get('location_preferences',[])
+                matches=[match for location in locations if (match:=preferred_location(location,preferences))]
+                if matches:
+                    rank,place=min(matches)
+                    notes.append(f'Location preference #{rank}: {place}')
                 notes+=['Eligibility requirement: '+str(x) for x in s['simplify'].get('requirements',[]) if __import__('re').search(r'must|graduate|student|citizen|authoriz|sponsor|eligible',str(x),__import__('re').I)]
                 self.store.update(j,listing_concerns=notes)
                 if not self.checkpoint(j):return
@@ -166,6 +193,32 @@ class Runner:
             if any(f['type']=='password' for f in s['fields']) or __import__('re').search(r'captcha|verify you are human|sign in to (?:apply|continue)|log in to (?:apply|continue)',s['text'],__import__('re').I):
                 self.store.update(j,status='Needs input',concerns=['Complete login or access challenge in Safari, then resume.']);return
             def signature(f):return s['url'].split('#')[0]+'|'+f.get('section','')+'|'+str(f.get('sectionIndex',0))+'|'+f['label']
+            if s.get('locationNeeded'):
+                address=profile.get('address',{})
+                region=address.get('region')
+                if address.get('country')=='Canada' and region=='BC':region='British Columbia'
+                parts=[address.get('city'),region,address.get('country')]
+                if all(parts):
+                    location={'value':', '.join(parts)}
+                    self.js(j,'location-search',location)
+                    for _ in range(10):
+                        time.sleep(.2)
+                        selection=self.js(j,'location-select',location)
+                        if selection['filled']:
+                            filled.extend(selection['filled'])
+                            break
+                    s=self.snapshot(j)
+                    if not s:return
+            if not self.checkpoint(j):return
+            if any(f['type']=='checkbox' and not f['value'] and answer_key(f['label'])=='i agree with the terms and conditions' for f in s['fields']):
+                agreement=self.js(j,'accept-terms',{'url':s['url']})
+                filled.extend(agreement['filled'])
+                concerns.extend(agreement['issues'])
+                s=self.snapshot(j)
+                if not s:return
+            for scope in ('shared',answer_scope(j)):
+                for label,saved in self.store.state.get('learned_answers',{}).get(scope,{}).items():
+                    profile.setdefault('answers',{}).setdefault(label,saved)
             remember_contact_fields(self.store,j,s,profile)
             p=plan([f for f in s['fields'] if signature(f) not in protected],profile,j.get('country'))
             for answer in p['answers']:
@@ -182,6 +235,11 @@ class Runner:
                     except (ValueError,OSError) as e:concerns.append(str(e) if isinstance(e,ValueError) else 'Cannot read resume file; configure a readable local PDF/DOCX.')
             time.sleep(.35);s=self.snapshot(j)
             if not s:return
+            for _ in range(15):
+                if 'Parsing the résumé' not in s['text']:break
+                time.sleep(.4)
+                s=self.snapshot(j)
+                if not s:return
             missing=[]
             for f in s['fields']:
                 if (f['required'] and not f['value'] and f['type']!='radio') or (f.get('invalid') and (f['required'] or f['value'])):missing.append(f['label']+(': '+f['validation'] if f.get('validation') else ': required answer missing'))
@@ -192,6 +250,7 @@ class Runner:
                     # An accepted/uploaded receipt mentioning the document is needed, not only input.files.
                     receipt=any(f['value'] in line and __import__('re').search(r'accepted|uploaded|upload complete|successfully attached',line,__import__('re').I) for line in s['text'].splitlines())
                     if not receipt and not f.get('attached'):missing.append(f['label']+': file selected; upload acceptance not confirmed')
+            if s.get('disabledFinal'):missing.append('Employer has disabled the final action. Check required fields and validation.')
             missing.extend(s['errors'])
             if s.get('shadows'):missing.append('Shadow DOM controls require manual review')
             if s['frames']:missing.append('Embedded frame contents require manual review')
@@ -253,6 +312,11 @@ def make_handler(store,runner,token,fixture,port):
                     profile=body['profile']
                     validate_profile(profile)
                     atomic(store.path/'profile.json',profile);return self.send({'ok':True})
+                if path=='/api/passwords':
+                    import subprocess
+                    if subprocess.run(['/usr/bin/open','-a','Passwords'],capture_output=True).returncode:
+                        raise ValueError('Open Passwords from Spotlight to view your saved logins.')
+                    return self.send({'ok':True})
                 if path=='/api/resume-check':
                     f=resume(store.profile(),store.path/'cache');return self.send({'name':f['name'],'mime':f['mime'],'valid':True})
                 if path=='/api/start':
@@ -260,7 +324,7 @@ def make_handler(store,runner,token,fixture,port):
                     with store.lock:
                         known={j['id']:j for j in store.state['jobs']};added=0;duplicates=0
                         for j in parsed['jobs']:
-                            if j['id'] in known:duplicates+=1;continue
+                            if j['id'] in known or j['id'] in store.state.get('removed_jobs',[]):duplicates+=1;continue
                             store.state['jobs'].append(j);known[j['id']]=j;added+=1
                         store.state['mode']='running';store.save()
                     return self.send({'added':added,'previously_prepared':duplicates,'warnings':parsed['warnings']})
@@ -277,6 +341,12 @@ def make_handler(store,runner,token,fixture,port):
                 if path=='/api/job':
                     with store.lock:
                         j=next(j for j in store.state['jobs'] if j['id']==body['id']);action=body['action']
+                        if action=='remove':
+                            store.state['jobs'].remove(j)
+                            store.state.setdefault('removed_jobs',[])
+                            if j['id'] not in store.state['removed_jobs']:store.state['removed_jobs'].append(j['id'])
+                            store.save()
+                            return self.send({'ok':True})
                         if j['status'] in ('Opening','Filling'):raise ValueError('Pause and wait for the current operation before editing this job.')
                         if action=='focus':
                             if not j.get('window'):raise ValueError('No Safari window opened yet')
@@ -286,6 +356,27 @@ def make_handler(store,runner,token,fixture,port):
                             if j.get('opening_pending'):raise ValueError('Interrupted during window creation. Inspect Safari first, then explicitly Reopen if needed.')
                             j['manual']=None
                             j['country']=body.get('country') or j.get('country');j['status']='Queued';j['missing']=[];j['concerns']=[];store.state['mode']='running'
+                        elif action in ('scan','learn'):
+                            if not j.get('window'):raise ValueError('Open the employer application first.')
+                            snap=runner.js(j,'inspect')
+                            if not snap or not j.get('final_url') or urllib.parse.urlsplit(snap['url']).netloc!=urllib.parse.urlsplit(j['final_url']).netloc:
+                                raise ValueError('Open the tracked employer application before scanning.')
+                            candidates=scan_answers(snap['fields'])
+                            if action=='scan':return self.send({'answers':candidates})
+                            shown=body.get('answers',{})
+                            if any(key not in candidates or entry!=candidates[key] for key,entry in shown.items()):
+                                raise ValueError('The form changed. Scan it again before saving.')
+                            learned=store.state.setdefault('learned_answers',{})
+                            for key,entry in shown.items():
+                                scope='shared' if key=='are you at least 18 years old' else answer_scope(j)
+                                learned.setdefault(scope,{})[key]={'value':entry['value']}
+                            store.save()
+                            return self.send({'saved':len(shown)})
+                        elif action=='account':
+                            host=urllib.parse.urlsplit(j.get('final_url') or '').hostname
+                            if not host:raise ValueError('Open the employer site first.')
+                            accounts=store.state.setdefault('accounts',{})
+                            accounts[host]={'company':j['company'],'site':'https://'+host,'email':store.profile().get('email') or ''}
                         elif action in ('submitted','skipped'):j['manual']=action
                         else:raise ValueError('Unknown action')
                         store.save()

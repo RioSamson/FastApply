@@ -7,7 +7,7 @@
     if(location.hostname!=='ats.rippling.com'||e.type!=='file')return '';
     const wrapper=e.parentElement?.parentElement?.parentElement;
     const title=norm(wrapper?.innerText.split('\n')[0]);
-    return /^résumé\*?$/i.test(title)?'Resume':title==='Cover letter'?'Cover letter':'';
+    return /^r\u00e9sum\u00e9\*?$/i.test(title)?'Resume':title==='Cover letter'?'Cover letter':'';
   }
   const label = e => ripplingFile(e) || (e.type==='file' && e.id==='resume') ? (ripplingFile(e)||'Resume') : norm(e.getAttribute('aria-label') || [...(e.labels || [])].map(x=>x.innerText).filter(Boolean).join(' ') || document.getElementById(e.getAttribute('aria-labelledby'))?.innerText || e.getAttribute('placeholder') || e.name || e.id);
 
@@ -18,9 +18,13 @@
     const siblings = section ? [...document.querySelectorAll('fieldset')].filter(s => norm(s.querySelector('legend')?.innerText) === norm(section.querySelector('legend')?.innerText)) : [];
     const wrapper=e.closest('.ashby-application-form-field-entry');
     const heading=wrapper?.querySelector('label');
+    const ripplingReceipt=ripplingFile(e)==='Resume' && e.parentElement.parentElement.parentElement.innerText.match(/File ([^\n]+) uploaded successfully/i);
     const attached=e.type==='file' && e.files.length && wrapper?.innerText.includes(e.files[0].name) && /\bReplace\b/.test(wrapper.innerText);
     const selection=e.closest('.select__value-container')?.querySelector('.select__single-value')?.innerText;
-    return {attached:!!attached || (ripplingFile(e)==='Resume' && !!e.files.length && /Total 1 file selected/i.test(e.parentElement.parentElement.innerText) && e.parentElement.parentElement.innerText.includes(e.files[0].name)),manual:e.dataset.fastapplyManual==='yes',ashbyQuestion:!!wrapper && e.tagName==='TEXTAREA',id:String(i),label:label(e),type:e.getAttribute('role')==='combobox' ? 'combobox' : e.type || e.getAttribute('role'),tag:e.tagName,required:ripplingFile(e)==='Resume' || e.required || e.getAttribute('aria-required')==='true', value:e.type==='file' ? [...e.files].map(f=>f.name).join(', ') : e.type==='radio'||e.type==='checkbox' ? (e.checked ? e.value : '') : selection || e.value || e.getAttribute('aria-valuetext') || '',
+    const radioGroup=e.type==='radio' && (e.closest('[role=radiogroup]')||section||wrapper);
+    const question=radioGroup ? norm(document.getElementById(radioGroup.getAttribute('aria-labelledby'))?.innerText || radioGroup.getAttribute('aria-label') || radioGroup.querySelector('legend')?.innerText || heading?.innerText) : '';
+    const siblingsInGroup=e.type==='radio' && e.name ? [...(e.form||document).querySelectorAll('input[type=radio]')].filter(r=>r.name===e.name && r.form===e.form) : [];
+    return {question,groupAnswered:siblingsInGroup.some(r=>r.checked),selectedLabel:e.selectedOptions?.[0]?.text || selection || e.getAttribute('aria-valuetext') || '',attached:!!ripplingReceipt || !!attached || (ripplingFile(e)==='Resume' && !!e.files.length && /Total 1 file selected/i.test(e.parentElement.parentElement.innerText) && e.parentElement.parentElement.innerText.includes(e.files[0].name)),manual:e.dataset.fastapplyManual==='yes',ashbyQuestion:!!wrapper && e.tagName==='TEXTAREA',id:String(i),label:label(e),type:e.getAttribute('role')==='combobox' ? 'combobox' : e.type || e.getAttribute('role'),tag:e.tagName,required:ripplingFile(e)==='Resume' || e.required || e.getAttribute('aria-required')==='true', value:e.type==='file' ? (ripplingReceipt?.[1] || [...e.files].map(f=>f.name).join(', ')) : e.type==='radio'||e.type==='checkbox' ? (e.checked ? e.value : '') : e.closest('.select__value-container') ? selection || '' : e.value || e.getAttribute('aria-valuetext') || '',
       option:e.value, section:norm(section?.querySelector('legend')?.innerText), sectionIndex:siblings.indexOf(section),
       options:e.options ? [...e.options].map(o=>({value:o.value,label:o.text,disabled:o.disabled})) : [], invalid:e.validity ? !e.validity.valid : e.getAttribute('aria-invalid')==='true', validation:e.validationMessage || ''};
   };
@@ -43,13 +47,17 @@
     if(document.querySelector('input[type=file],input[type=email],input[type=password]') || [...document.forms].some(visible))return null;
     return [...document.querySelectorAll(selector)].find(e=>visible(e)&&!e.disabled&&!e.form&&(/^apply( now)?$/i.test(norm(e.innerText)) || (host.endsWith('.careers.hibob.com') && norm(e.innerText)==='Application')));
   }
-  const snapshot = () => ({entry:!!entryButton(),simplify:simplify(),url:location.href,title:document.title,ready:document.readyState,text:document.body.innerText.slice(0,35000),fields:elements().map(field),
+  function locationInput(){
+    if(location.hostname!=='ats.rippling.com')return null;
+    return [...document.querySelectorAll('input[aria-autocomplete=list]')].find(e=>visible(e) && /^location\s*\*?$/i.test(norm(document.getElementById(e.getAttribute('aria-labelledby'))?.innerText)));
+  }
+  const snapshot = () => ({locationNeeded:!!locationInput() && (!locationInput().value || locationInput().getAttribute('aria-invalid')==='true' || document.getElementById(locationInput().id+'-list')?.getClientRects().length),entry:!!entryButton(),simplify:simplify(),url:location.href,title:document.title,ready:document.readyState,text:document.body.innerText.slice(0,35000),fields:elements().map(field),
     links:[...document.querySelectorAll('a[href]')].filter(visible).map(a=>({text:norm(a.innerText||a.getAttribute('aria-label')),url:a.href})),
     shadows:[...document.querySelectorAll('*')].filter(e=>e.shadowRoot).length,frame_urls:[...document.querySelectorAll('iframe[src]')].map(e=>e.src),frames:[...document.querySelectorAll('iframe')].filter(e=>visible(e) && e.clientHeight>2 && e.clientWidth>2 && !/recaptcha.*\/anchor/.test(e.src)).length,custom:document.querySelectorAll('[role="combobox"]').length,
     errors:[...document.querySelectorAll('[role="alert"],.error,.field-error,[aria-invalid="true"]')].filter(e=>visible(e) && e.id!=='__next-route-announcer__').map(e=>norm(e.innerText || (e.matches('[aria-invalid=true]')?label(e):''))).filter(Boolean).slice(0,20),
     fixture:document.documentElement.dataset.jobprepFixture || '',
     intermediate:!!document.querySelector('button[data-jobprep-next]'),
-    final:[...document.querySelectorAll('button,input[type="submit"]')].filter(visible).some(e=>/submit|send application|apply/i.test(e.innerText||e.value))});
+    disabledFinal:[...document.querySelectorAll('button[type=submit]')].some(e=>visible(e)&&(e.disabled||e.getAttribute('aria-disabled')==='true')),final:[...document.querySelectorAll('button,input[type="submit"]')].filter(visible).some(e=>/submit|send application|apply/i.test(e.innerText||e.value))});
   if(!window.__fastapplyObserve){
     document.addEventListener('change',e=>{if(e.isTrusted && e.target.matches('input[type=text],input[type=email],input[type=tel],input[type=url],textarea'))e.target.dataset.fastapplyManual='yes';},true);
     window.__fastapplyObserve=true;
@@ -63,14 +71,29 @@
   HTMLFormElement.prototype.submit=function(){issues.push('Blocked scripted form submission.');};
   HTMLFormElement.prototype.requestSubmit=function(){issues.push('Blocked scripted form submission.');};
   try {
+    if(op==='location-search'||op==='location-select'){
+      const e=locationInput();
+      if(e && payload.value && op==='location-search'){
+        e.focus();
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,payload.value);
+        e.dispatchEvent(new Event('input',{bubbles:true}));
+      }else if(e){
+        const opts=[...(document.getElementById(e.id+'-list')?.querySelectorAll('[role=option]')||[])].filter(o=>visible(o)&&norm(o.innerText)===payload.value);
+        if(opts.length===1){opts[0].click();filled.push('Location');}
+      }
+    }
+    if(op==='accept-terms' && payload.url===location.href && location.hostname.endsWith('.oraclecloud.com')){
+      const choices=elements().filter(e=>e.type==='checkbox' && /^i agree with the terms and conditions[.!* ]*$/i.test(label(e)) && !e.checked);
+      if(choices.length===1){choices[0].click();if(choices[0].checked)filled.push('Terms and conditions');}
+    }
     if(op==='entry' && payload.url===location.href) entryButton()?.click();
     if(op==='custom-open' || op==='custom-select') {
       const e=document.querySelector('[data-jobprep-id="'+payload.id+'"]');
-      const list=e && document.getElementById(e.getAttribute('aria-controls'));
+      const list=e && document.getElementById(e.getAttribute('aria-controls') || e.getAttribute('aria-owns') || (e.closest('.select__control') && 'react-select-'+e.id+'-listbox'));
       if(!e || e.getAttribute('role')!=='combobox' || (!list && op==='custom-select') || (e.tagName==='BUTTON' && e.type!=='button')) issues.push('Unsupported custom dropdown; select manually.');
       else if(op==='custom-open') {
         const control=e.closest('.select__control');
-        if(control && !list)control.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));
+        if(control && !list){e.focus();e.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));if(e.getAttribute('aria-expanded')!=='true')control.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0}));}
         else e.click();
       }
       else {
@@ -87,7 +110,7 @@
       if((e.type==='checkbox'||e.type==='radio') ? e.checked : !!e.value) continue;
       if(e.getAttribute('role')==='combobox' && e.tagName!=='SELECT') {issues.push(label(e)+': custom control needs manual selection.');continue;}
       if(e.type==='radio'||e.type==='checkbox') {
-        if(a.checked===true) e.checked=true; else continue;
+        if(a.checked===true){e.click();if(e.checked)filled.push(label(e));}continue;
       } else {
         const proto = e.tagName==='SELECT'?HTMLSelectElement.prototype:e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
         Object.getOwnPropertyDescriptor(proto,'value').set.call(e,String(a.value));
