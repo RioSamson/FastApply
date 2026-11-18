@@ -2,6 +2,7 @@
 """Single-user local application. Python 3.10+, no third-party dependencies."""
 import argparse, json, os, pathlib, secrets, threading, time, urllib.parse, urllib.request, http.server, signal, sys, fcntl
 from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile, answer_key, learnable, preferred_location
+from experience import fill_experience
 from safari import Safari, SafariError
 
 ROOT=pathlib.Path(__file__).resolve().parent
@@ -161,7 +162,7 @@ class Runner:
                 self.js(j,'entry',{'url':s['url']})
                 time.sleep(1)
                 continue
-            if s['fields'] or s.get('cards') or '/apply/section/' in s['url']:break
+            if s['fields'] or s.get('experience') or s.get('cards') or '/apply/section/' in s['url']:break
             candidates=[l for l in s['links'] if __import__('re').fullmatch(r'apply(?: here| now| for (?:this )?(?:job|position)| on (?:company|employer)(?: website)?)?|apply externally',l['text'],__import__('re').I) and safe_url(l['url'],self.fixture)]
             candidates=list({l['url']:l for l in candidates}.values())
             if len(candidates)!=1:
@@ -188,6 +189,8 @@ class Runner:
         attempted_choices=set()
         attempted_cards=set()
         editing=None
+        experience_checked=False
+        experience_problems=[]
         for step in range(32):
             if not self.checkpoint(j):return
             s=self.snapshot(j)
@@ -195,6 +198,17 @@ class Runner:
             # Country is explicitly configured per job; never inferred from address or education.
             if any(f['type']=='password' for f in s['fields']) or __import__('re').search(r'captcha|verify you are human|sign in to (?:apply|continue)|log in to (?:apply|continue)',s['text'],__import__('re').I):
                 self.store.update(j,status='Needs input',concerns=['Complete login or access challenge in Safari, then resume.']);return
+            if s.get('experience') is not None and not experience_checked:
+                experience_checked=True
+                saved, experience_problems=fill_experience(
+                    lambda op, payload: self.js(j,op,payload),
+                    lambda: self.snapshot(j), s, profile.get('employment',[]))
+                filled.extend(saved)
+                if not self.checkpoint(j):return
+                if experience_problems:
+                    self.store.update(j,status='Needs input',missing=experience_problems,concerns=concerns,filled=list(dict.fromkeys(filled)))
+                    return
+                continue
             def signature(f):return s['url'].split('#')[0]+'|'+f.get('section','')+'|'+str(f.get('sectionIndex',0))+'|'+f['label']
             if s.get('locationNeeded'):
                 address=profile.get('address',{})
@@ -302,12 +316,15 @@ class Runner:
             if s.get('shadows'):missing.append('Shadow DOM controls require manual review')
             if s['frames']:missing.append('Embedded frame contents require manual review')
             if s.get('cards'):missing.append('Review the education or experience entries Oracle marked for correction.')
-            if not s['fields'] and '/apply/section/' not in s['url']:missing.append('No recognizable application fields found')
+            if not s['fields'] and s.get('experience') is None and '/apply/section/' not in s['url']:missing.append('No recognizable application fields found')
             protected.update(signature(f) for f in s['fields'] if f['value'])
             self.store.update(j,protected_fields=sorted(protected))
             if not missing and s['fixture']=='multi' and s['intermediate'] and self.fixture:
                 self.js(j,'next');time.sleep(.2);continue
-            if not s['final']:missing.append('Final review stage not recognized. Navigate intermediate steps manually, then resume.')
+            if s.get('experience') is not None and not missing:
+                missing.append('Experience entries checked. Click Next in Safari, then resume.')
+            elif not s['final']:
+                missing.append('Final review stage not recognized. Navigate intermediate steps manually, then resume.')
             # Always surface location/eligibility requirements for user review without excluding any jobs.
             concerns.extend(line[:220] for line in s['text'].splitlines() if __import__('re').search(r'\b(?:must be|must have|eligible|sponsorship|relocation|on.site|work authoriz)',line,__import__('re').I))
             if any(f['type']=='checkbox' and __import__('re').search(r'agree|certify|consent|terms|attest',f['label'],__import__('re').I) and not f['value'] for f in s['fields']):concerns.append('Legal declarations must be completed by you.')

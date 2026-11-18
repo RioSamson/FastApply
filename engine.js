@@ -59,13 +59,46 @@
       subtitle:norm(tile.querySelector('.apply-flow-profile-item-tile__summary-subtitle')?.innerText)
     }));
   }
-  const snapshot = () => ({cards:oracleCards(),locationNeeded:!!locationInput() && (!locationInput().value || locationInput().getAttribute('aria-invalid')==='true' || document.getElementById(locationInput().id+'-list')?.getClientRects().length),entry:!!entryButton(),simplify:simplify(),url:location.href,title:document.title,ready:document.readyState,text:document.body.innerText.slice(0,35000),fields:elements().map(field),
+  function experiencePage() {
+    const fixture = location.hostname==='127.0.0.1' && document.documentElement.dataset.jobprepFixture==='experience';
+    const jpmorgan = location.hostname==='jpmc.fa.oraclecloud.com' && /\/apply\/section\/\d+\/?$/.test(location.pathname);
+    if(!fixture && !jpmorgan)return null;
+    const open = [...document.querySelectorAll('button[id^=profileItemsAddButton-]')].find(e=>visible(e) && norm(e.innerText).toUpperCase()==='ADD EXPERIENCE');
+    const employer = [...document.querySelectorAll('input[name=employerName]')].find(visible);
+    const editor = employer?.closest('.standard-apply-flow-profile-item');
+    const block = (editor || open)?.closest('apply-flow-block');
+    if(!block)return null;
+    return {block,open,editor};
+  }
+  function experienceSnapshot(fields) {
+    const page = experiencePage();
+    if(!page)return null;
+    const cards = [...page.block.querySelectorAll('article.apply-flow-profile-item-tile')].filter(visible).map(tile=>({
+      id:tile.id,title:norm(tile.querySelector('.apply-flow-profile-item-tile__summary-title')?.innerText),
+      subtitle:norm(tile.querySelector('.apply-flow-profile-item-tile__summary-subtitle')?.innerText),
+      invalid:tile.classList.contains('apply-flow-profile-item-tile--invalid')
+    }));
+    const controls = fields.flatMap(f=>{
+      const e=document.querySelector('[data-jobprep-id="'+f.id+'"]');
+      if(!page.editor?.contains(e))return [];
+      let key=e.name;
+      if(/^(year|month)-(startDate|endDate)-/.test(e.id))key=e.id.replace(/-\d+$/,'');
+      if(e.id.startsWith('af-checkbox-currentJobFlag-'))key='currentJobFlag';
+      if(f.type==='radio')key=f.question;
+      return [{...f,key}];
+    });
+    return {editor:!!page.editor,cards,fields:controls};
+  }
+  const snapshot = () => {
+    const fields=elements().map(field);
+    return {experience:experienceSnapshot(fields),cards:oracleCards(),locationNeeded:!!locationInput() && (!locationInput().value || locationInput().getAttribute('aria-invalid')==='true' || document.getElementById(locationInput().id+'-list')?.getClientRects().length),entry:!!entryButton(),simplify:simplify(),url:location.href,title:document.title,ready:document.readyState,text:document.body.innerText.slice(0,35000),fields,
     links:[...document.querySelectorAll('a[href]')].filter(visible).map(a=>({text:norm(a.innerText||a.getAttribute('aria-label')),url:a.href})),
     shadows:[...document.querySelectorAll('*')].filter(e=>e.shadowRoot).length,frame_urls:[...document.querySelectorAll('iframe[src]')].map(e=>e.src),frames:[...document.querySelectorAll('iframe')].filter(e=>visible(e) && e.clientHeight>2 && e.clientWidth>2 && !/recaptcha.*\/anchor/.test(e.src)).length,custom:document.querySelectorAll('[role="combobox"]').length,
     errors:[...document.querySelectorAll('[role="alert"],.error,.field-error,[aria-invalid="true"]')].filter(e=>visible(e) && e.id!=='__next-route-announcer__' && !(location.hostname.endsWith('.oraclecloud.com') && e.matches('[role=alert].oj-helper-hidden-accessible'))).map(e=>norm(e.innerText || (e.matches('[aria-invalid=true]')?label(e):''))).filter(msg=>msg && !(location.hostname.endsWith('.oraclecloud.com') && msg==='Saved')).slice(0,20),
     fixture:document.documentElement.dataset.jobprepFixture || '',
     intermediate:!!document.querySelector('button[data-jobprep-next]'),
-    disabledFinal:[...document.querySelectorAll('button[type=submit]')].some(e=>visible(e)&&(e.disabled||e.getAttribute('aria-disabled')==='true')),final:[...document.querySelectorAll('button,input[type="submit"]')].filter(visible).some(e=>/submit|send application|apply/i.test(e.innerText||e.value))});
+    disabledFinal:[...document.querySelectorAll('button[type=submit]')].some(e=>visible(e)&&(e.disabled||e.getAttribute('aria-disabled')==='true')),final:[...document.querySelectorAll('button,input[type="submit"]')].filter(visible).some(e=>/^(?:submit(?: application)?|send application|apply)$/i.test(norm(e.innerText||e.value)))};
+  };
   if(!window.__fastapplyObserve){
     document.addEventListener('change',e=>{if(e.isTrusted && e.target.matches('input[type=text],input[type=email],input[type=tel],input[type=url],textarea'))e.target.dataset.fastapplyManual='yes';},true);
     window.__fastapplyObserve=true;
@@ -79,6 +112,17 @@
   HTMLFormElement.prototype.submit=function(){issues.push('Blocked scripted form submission.');};
   HTMLFormElement.prototype.requestSubmit=function(){issues.push('Blocked scripted form submission.');};
   try {
+    if(op.startsWith('experience-') && payload.url===location.href){
+      const page=experiencePage();
+      let button;
+      if(op==='experience-open' && page && !page.editor){
+        const tile=payload.id && document.getElementById(payload.id);
+        button=payload.id ? (tile && page.block.contains(tile) && tile.querySelector('button[aria-label=Edit]')) : page.open;
+      }
+      if(op==='experience-save')button=page?.editor?.querySelector('button[data-qa=profileItemInlineSaveButton]');
+      if(op==='experience-cancel')button=page?.editor?.querySelector('button.cancel-btn');
+      if(button && visible(button) && !button.disabled){button.click();filled.push(op);}
+    }
     if(op==='edit-card' && oracleCards().some(card=>card.id===payload.id)){
       document.getElementById(payload.id)?.querySelector('button[aria-label=Edit]')?.click();
     }
@@ -105,7 +149,7 @@
     if(op==='custom-open' || op==='custom-select') {
       const e=document.querySelector('[data-jobprep-id="'+payload.id+'"]');
       const list=e && document.getElementById(e.getAttribute('aria-controls') || e.getAttribute('aria-owns') || (e.closest('.select__control') && 'react-select-'+e.id+'-listbox'));
-      const oracleGrid=e?.classList.contains('cx-select-input') && e.getAttribute('aria-haspopup')==='grid' && location.hostname.endsWith('.oraclecloud.com');
+      const oracleGrid=e?.classList.contains('cx-select-input') && e.getAttribute('aria-haspopup')==='grid' && (location.hostname.endsWith('.oraclecloud.com') || experiencePage());
       if(oracleGrid && op==='custom-open'){
         e.focus();
         if(e.getAttribute('aria-expanded')!=='true')document.getElementById(e.id+'-toggle-button')?.click();
