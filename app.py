@@ -61,6 +61,12 @@ def remember_contact_fields(store,job,snapshot,profile):
 def answer_scope(job):
     return job['company'].casefold()+'|'+(urllib.parse.urlsplit(job.get('final_url') or '').hostname or '')
 
+def reusable_scope(key, entry, share, job):
+    if key=='are you at least 18 years old' or (key in share and learnable(entry['label'])):
+        return 'shared'
+    return answer_scope(job)
+
+
 def scan_answers(fields):
     candidates={}
     for field in fields:
@@ -68,7 +74,7 @@ def scan_answers(fields):
         label=(field.get('question') if kind=='radio' else field['label']) or ''
         value=field.get('selectedLabel') or (field['label'] if kind=='radio' else field['value'])
         allowed={'text','textarea','select-one','combobox','radio','url','tel','email','date','number'}
-        if not label or not field['value'] or not value or kind not in allowed or not learnable(label):
+        if field.get('invalid') or not label or not field['value'] or not value or kind not in allowed or not learnable(label):
             continue
         key=answer_key(label)
         if key=='are you at least 18 years old' and value.strip().casefold() not in ('yes','no'):
@@ -233,7 +239,7 @@ class Runner:
                 concerns.extend(agreement['issues'])
                 s=self.snapshot(j)
                 if not s:return
-            for scope in ('shared',answer_scope(j)):
+            for scope in (answer_scope(j),'shared'):
                 for label,saved in self.store.state.get('learned_answers',{}).get(scope,{}).items():
                     profile.setdefault('answers',{}).setdefault(label,saved)
             remember_contact_fields(self.store,j,s,profile)
@@ -432,9 +438,14 @@ def make_handler(store,runner,token,fixture,port):
                             if any(key not in candidates or entry!=candidates[key] for key,entry in shown.items()):
                                 raise ValueError('The form changed. Scan it again before saving.')
                             learned=store.state.setdefault('learned_answers',{})
+                            share=body.get('share',[])
+                            if not isinstance(share,list) or any(key not in shown for key in share):
+                                raise ValueError('Select an answer before sharing it across employers.')
                             for key,entry in shown.items():
-                                scope='shared' if key=='are you at least 18 years old' else answer_scope(j)
+                                scope=reusable_scope(key,entry,share,j)
                                 learned.setdefault(scope,{})[key]={'value':entry['value']}
+                                if scope=='shared':
+                                    learned.get(answer_scope(j),{}).pop(key,None)
                             store.save()
                             return self.send({'saved':len(shown)})
                         elif action=='account':

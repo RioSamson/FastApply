@@ -59,7 +59,7 @@ def extract(text,fixture=False):
 
 ALIASES={
 'first name':'first_name','given name':'first_name','middle name':'middle_name','middle initial':'middle_initial','country of residence':'address.country','last name':'last_name','family name':'last_name','full name':'name','name':'name','email':'email','email address':'email','phone':'phone','phone number':'phone','mobile phone':'phone','linkedin':'linkedin','linkedin profile':'linkedin','linkedin url':'linkedin','github':'github','github url':'github','portfolio':'portfolio','website':'portfolio','address':'address.street','street address':'address.street','address line 1':'address.street','city':'address.city','state':'address.region','province':'address.region','postal code':'address.postal_code','zip code':'address.postal_code','country':'address.country','skills':'skills'}
-SENSITIVE=re.compile(r'authori[sz]|sponsor|citizen|visa|salary|compensation|available|availability|start date|notice period|relocat|student|veteran|disabil|gender|ethnic|race|pronoun|age|birth|sexual|nationality',re.I)
+SENSITIVE=re.compile(r'authori[sz]|sponsor|citizen|visa|salary|compensation|available|availability|start date|notice period|relocat|student|veteran|disabil|gender|ethnic|race|pronoun|\bage\b|birth|sexual|nationality',re.I)
 LEGAL=re.compile(r'agree|accept|acknowledge|confirm|certify|consent|signature|declaration|terms|attest|privacy|policy',re.I)
 def norm(s):return re.sub(r'[^\w ]','',s.lower()).strip()
 def answer_key(label):
@@ -68,7 +68,12 @@ def answer_key(label):
         return 'are you at least 18 years old'
     return cleaned
 
+def demographic(label):
+    return bool(re.search(r'gender|ethnic|race|hispanic|latino|veteran|military|disabil|sexual|pronoun',label,re.I))
+
 def learnable(label):
+    if demographic(label) or answer_key(label) in {'select', 'search', 'textbox', 'combobox', 'choose'}:
+        return False
     if LEGAL.search(label) or re.search(r'password|verification|one time|security code|social security|\bssn\b|passport|bank|tax id|pin code|secret|credential|birth|religion',label,re.I):
         return False
     return not SENSITIVE.search(label) or answer_key(label)=='are you at least 18 years old'
@@ -112,7 +117,7 @@ def plan(fields,profile,country=None):
         if group and n in ('start date','end date'):
             rows=profile.get(group,[]);index=max(0,f.get('sectionIndex',0))
             if index<len(rows):value=rows[index].get(n.replace(' ','_'))
-        if re.search(r'gender|ethnic|race|veteran|disabil|sexual|pronoun',label,re.I) and profile.get('demographics',{}).get('preference','leave_unanswered')=='leave_unanswered':value=None
+        if demographic(question) and profile.get('demographics',{}).get('preference','leave_unanswered')=='leave_unanswered':continue
         if value is None and not SENSITIVE.search(label):
             value=getpath(profile,ALIASES.get(n,''))
             section=norm(f.get('section',''))

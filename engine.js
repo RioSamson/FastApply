@@ -9,7 +9,24 @@
     const title=norm(wrapper?.innerText.split('\n')[0]);
     return /^r\u00e9sum\u00e9\*?$/i.test(title)?'Resume':title==='Cover letter'?'Cover letter':'';
   }
-  const label = e => e.closest('.apply-flow-esign,.esign-form') ? 'E-signature' : e.matches('button[role=radio]') ? norm(e.innerText) : ripplingFile(e) || (e.type==='file' && e.id==='resume') ? (ripplingFile(e)||'Resume') : norm(e.getAttribute('aria-label') || [...(e.labels || [])].map(x=>x.innerText).filter(Boolean).join(' ') || document.getElementById(e.getAttribute('aria-labelledby'))?.innerText || e.getAttribute('placeholder') || e.name || e.id);
+  const rippling = location.hostname==='ats.rippling.com' ||
+    (location.hostname==='127.0.0.1' && document.documentElement.dataset.jobprepFixture==='rippling-learning');
+  const labelledBy = e => norm((e.getAttribute('aria-labelledby') || '').split(/\s+/)
+    .map(id=>document.getElementById(id)?.innerText).filter(Boolean).join(' ')).replace(/\s*\*$/, '');
+  const label = e => {
+    if(e.closest('.apply-flow-esign,.esign-form'))return 'E-signature';
+    if(e.matches('button[role=radio]'))return norm(e.innerText);
+    if(e.type==='file')return ripplingFile(e) || (e.id==='resume' ? 'Resume' : norm(e.getAttribute('aria-label') || e.name || e.id));
+    const aria=e.getAttribute('aria-label');
+    if(rippling && aria==='Search' && e.closest('[data-testid=phone-number]'))return 'Phone country code';
+    return (rippling && labelledBy(e)) || norm(aria || [...(e.labels || [])].map(x=>x.innerText).filter(Boolean).join(' ') || labelledBy(e) || e.getAttribute('placeholder') || e.name || e.id);
+  };
+  function ripplingChoice(e) {
+    if(!rippling || e.getAttribute('role')!=='combobox')return null;
+    const controller=e.closest('[data-testid=select-controller]');
+    const text=norm(e.tagName==='DIV' ? e.innerText : controller?.innerText || (e.getAttribute('aria-expanded')==='false' ? e.value : ''));
+    return /^select(?:\s*\u2026|\.*)?$/i.test(text) ? '' : text;
+  }
 
   const elements = () => { document.querySelectorAll('[data-jobprep-id]').forEach(e=>e.removeAttribute('data-jobprep-id')); return [...document.querySelectorAll('input,select,textarea,[role="combobox"],button[type=button][role=radio]')].filter(e => (visible(e)||ripplingFile(e)) && !e.closest('.ashby-application-form-autofill-pane,.ashby-application-form-autofill-uploader') && !e.disabled && (e.matches('button[role=radio]') || !['hidden','submit','button','reset'].includes(e.type))); };
   const field = (e,i) => {
@@ -20,14 +37,15 @@
     const heading=wrapper?.querySelector('label');
     const ripplingReceipt=ripplingFile(e)==='Resume' && e.parentElement.parentElement.parentElement.innerText.match(/File ([^\n]+) uploaded successfully/i);
     const attached=e.type==='file' && e.files.length && wrapper?.innerText.includes(e.files[0].name) && /\bReplace\b/.test(wrapper.innerText);
+    const ripplingSelection=ripplingChoice(e);
     const selection=e.closest('.select__value-container')?.querySelector('.select__single-value')?.innerText;
     const pill=e.matches('button[role=radio]');
     const radioGroup=(pill || e.type==='radio') && (e.closest('[role=radiogroup]')||section||wrapper);
     const question=radioGroup ? norm(document.getElementById(radioGroup.getAttribute('aria-labelledby'))?.innerText || radioGroup.getAttribute('aria-label') || radioGroup.querySelector('legend')?.innerText || heading?.innerText) : '';
     const siblingsInGroup=e.type==='radio' && e.name ? [...(e.form||document).querySelectorAll('input[type=radio]')].filter(r=>r.name===e.name && r.form===e.form) : [];
-    return {question,groupAnswered:pill ? !!radioGroup?.querySelector('[aria-checked=true]') : siblingsInGroup.some(r=>r.checked),selectedLabel:e.selectedOptions?.[0]?.text || selection || e.getAttribute('aria-valuetext') || '',attached:!!ripplingReceipt || !!attached || (ripplingFile(e)==='Resume' && !!e.files.length && /Total 1 file selected/i.test(e.parentElement.parentElement.innerText) && e.parentElement.parentElement.innerText.includes(e.files[0].name)),manual:e.dataset.fastapplyManual==='yes',ashbyQuestion:!!wrapper && e.tagName==='TEXTAREA',id:String(i),label:label(e),type:pill ? 'radio' : e.getAttribute('role')==='combobox' ? 'combobox' : e.type || e.getAttribute('role'),tag:e.tagName,required:ripplingFile(e)==='Resume' || e.required || e.getAttribute('aria-required')==='true', value:pill ? (e.getAttribute('aria-checked')==='true' ? label(e) : '') : e.type==='file' ? (ripplingReceipt?.[1] || [...e.files].map(f=>f.name).join(', ')) : e.type==='radio'||e.type==='checkbox' ? (e.checked ? e.value : '') : e.closest('.select__value-container') ? selection || '' : e.value || e.getAttribute('aria-valuetext') || '',
+    return {question,groupAnswered:pill ? !!radioGroup?.querySelector('[aria-checked=true]') : siblingsInGroup.some(r=>r.checked),selectedLabel:ripplingSelection || e.selectedOptions?.[0]?.text || selection || e.getAttribute('aria-valuetext') || '',attached:!!ripplingReceipt || !!attached || (ripplingFile(e)==='Resume' && !!e.files.length && /Total 1 file selected/i.test(e.parentElement.parentElement.innerText) && e.parentElement.parentElement.innerText.includes(e.files[0].name)),manual:e.dataset.fastapplyManual==='yes',ashbyQuestion:!!wrapper && e.tagName==='TEXTAREA',id:String(i),label:label(e),type:pill ? 'radio' : e.getAttribute('role')==='combobox' ? 'combobox' : e.type || e.getAttribute('role'),tag:e.tagName,required:ripplingFile(e)==='Resume' || e.required || e.getAttribute('aria-required')==='true', value:pill ? (e.getAttribute('aria-checked')==='true' ? label(e) : '') : e.type==='file' ? (ripplingReceipt?.[1] || [...e.files].map(f=>f.name).join(', ')) : e.type==='radio'||e.type==='checkbox' ? (e.checked ? e.value : '') : ripplingSelection!==null ? ripplingSelection : e.closest('.select__value-container') ? selection || '' : e.value || e.getAttribute('aria-valuetext') || '',
       option:pill ? label(e) : e.value, section:norm(section?.querySelector('legend')?.innerText), sectionIndex:siblings.indexOf(section),
-      options:e.options ? [...e.options].map(o=>({value:o.value,label:o.text,disabled:o.disabled})) : [], invalid:e.validity ? !e.validity.valid : e.getAttribute('aria-invalid')==='true', validation:e.validationMessage || ''};
+      options:e.options ? [...e.options].map(o=>({value:o.value,label:o.text,disabled:o.disabled})) : [], invalid:e.getAttribute('aria-invalid')==='true' || (e.validity ? !e.validity.valid : false), validation:e.validationMessage || ''};
   };
   const simplify = () => {
     if(!['simplify.jobs','www.simplify.jobs'].includes(location.hostname)) return null;
@@ -161,10 +179,15 @@
       else if(op==='custom-open') {
         const control=e.closest('.select__control');
         if(control && !list){e.focus();e.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true,cancelable:true}));if(e.getAttribute('aria-expanded')!=='true')control.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0}));}
-        else e.click();
+        else if(rippling && e.tagName==='INPUT'){
+          e.focus();
+          if(e.getAttribute('aria-expanded')!=='true')e.click();
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,String(payload.value));
+          e.dispatchEvent(new Event('input',{bubbles:true}));
+        }else if(e.getAttribute('aria-expanded')!=='true')e.click();
       }
       else {
-        const matches=[...list.querySelectorAll(oracleGrid?'[role="gridcell"]':'[role="option"]')].filter(o=>visible(o)&&([payload.value,...(oracleGrid ? payload.aliases || [] : [])].some(v=>norm(o.innerText).toLowerCase()===String(v).toLowerCase()) || (e.id==='country' && norm(o.innerText).replace(/\s*\(\+?[\d -]+\)$/, '').toLowerCase()===String(payload.value).toLowerCase())) && (o.tagName!=='BUTTON'||o.type==='button'));
+        const matches=[...list.querySelectorAll(oracleGrid?'[role="gridcell"]':'[role="option"]')].filter(o=>visible(o)&&o.getAttribute('aria-disabled')!=='true'&&([payload.value,...(oracleGrid ? payload.aliases || [] : [])].some(v=>norm(o.innerText).toLowerCase()===String(v).toLowerCase()) || (e.id==='country' && norm(o.innerText).replace(/\s*\(\+?[\d -]+\)$/, '').toLowerCase()===String(payload.value).toLowerCase())) && (o.tagName!=='BUTTON'||o.type==='button'));
         if(matches.length===1){matches[0].click();filled.push(label(e));}else issues.push('No unique custom dropdown option; select manually.');
       }
     }

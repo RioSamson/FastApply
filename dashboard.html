@@ -7,7 +7,7 @@
 <section><h2>2. Paste your SWElist email</h2><textarea id="email" placeholder="Paste directly from your email or webpage — links are kept automatically…" aria-label="Email content"></textarea><button id="preview">Preview jobs</button><button class="secondary" id="sample">Load sample jobs</button><button class="secondary" id="demo">Load local fixtures</button><div id="preview-result"></div><button id="start" disabled>Start batch</button><small>All parsed jobs are included. No filtering by fit or location.</small></section>
 <section><header><h2>3. Application workspace</h2><span class="stats" id="stats"></span></header><button class="secondary" data-mode="paused">Pause</button><button data-mode="running">Resume queue</button><button class="secondary" data-mode="cancelled">Cancel queue</button><p class="muted">Pause/cancel takes effect between operations. Forms remain open. Resume job after handling login, questions, or an intermediate step. Existing values are preserved.</p><div id="jobs"></div></section>
 <section><h2>Employer accounts</h2><p>When an employer asks you to register, use Safari's suggested password and save it in Passwords. If Safari offers <strong>Fill from email</strong>, select it in the verification field.</p><button class="secondary" id="passwords">Open Passwords</button><div id="accounts"></div></section>
-<dialog id="learning"><form method="dialog"><h2>Scan and learn answers</h2><p>Choose which answers to reuse. Employer answers stay scoped to that employer. Your approved 18-or-older answer can be reused across employers.</p><div id="learn-items"></div><button value="cancel" class="secondary">Cancel</button><button value="save" id="save-answers">Save selected answers</button></form></dialog>
+<dialog id="learning"><form method="dialog"><h2>Scan and learn answers</h2><p>Choose which answers to reuse. Answers default to this employer. Turn on reuse only for answers that apply to the same question at other employers. Your approved 18-or-older answer is shared automatically.</p><div id="learn-items"></div><p id="learn-error" role="alert" hidden></p><button value="cancel" class="secondary">Cancel</button><button type="button" id="save-answers">Save selected answers</button></form></dialog>
 <script>
 const $=s=>document.querySelector(s),token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('jobprep-token');if(token)sessionStorage.setItem('jobprep-token',token);history.replaceState(null,'',location.pathname);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -70,16 +70,30 @@ $('#check-resume').onclick=act(async()=>{const r=await api('resume-check',{});me
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=act(async()=>{await api('control',{mode:b.dataset.mode});await refresh()}));
 $('#passwords').onclick=act(async()=>{await api('passwords',{})});
 let scan=null;
-$('#save-answers').onclick=act(async()=>{
-    const selected=Object.fromEntries([...$('#learn-items').querySelectorAll('input:checked')].map(e=>[e.value,scan.answers[e.value]]));
-    const result=await api('job',{id:scan.id,action:'learn',answers:selected});
-    message(result.saved+' answers saved for future applications.');
-});
+$('#save-answers').onclick=async()=>{
+    const button=$('#save-answers'), error=$('#learn-error');
+    error.hidden=true;
+    button.disabled=true;
+    try{
+        const selected=Object.fromEntries([...$('#learn-items').querySelectorAll('input[data-answer]:checked')].map(e=>[e.value,scan.answers[e.value]]));
+        if(!Object.keys(selected).length)throw new Error('Select at least one answer to save.');
+        const share=[...$('#learn-items').querySelectorAll('input[data-share]:checked')].map(e=>e.value).filter(key=>Object.hasOwn(selected,key));
+        const result=await api('job',{id:scan.id,action:'learn',answers:selected,share});
+        $('#learning').close();
+        message(result.saved+' answers saved for future applications.');
+    }catch(e){
+        error.textContent=e.message;
+        error.hidden=false;
+    }finally{
+        button.disabled=false;
+    }
+};
 let last='';async function refresh(){const s=await api('state');$('#mode').textContent=s.mode;$('#stats').textContent=s.jobs.filter(j=>j.status==='Ready for review').length+' ready / '+s.jobs.length+' total';$('#accounts').innerHTML=Object.values(s.accounts||{}).map(a=>'<p><a target="_blank" rel="noreferrer" href="'+esc(a.site)+'">'+esc(a.company)+'</a> '+esc(a.email)+'</p>').join('')||'<small>Use Record account on a job after registering.</small>';const serialized=JSON.stringify(s.jobs);if(serialized===last)return;last=serialized;$('#jobs').innerHTML=s.jobs.length?'<table><thead><tr><th>Job</th><th>Status</th><th>Review notes</th><th>Actions</th></tr></thead><tbody>'+s.jobs.map(j=>`<tr><td><strong>${esc(j.company)}</strong><small>${esc(j.title)}</small><small><a target="_blank" rel="noreferrer" href="${esc(j.original_url)}">Listing</a></small>${j.final_url?'<small>Employer: '+esc(new URL(j.final_url).hostname)+'</small>':''}</td><td><span class="pill ${j.status==='Ready for review'?'ready':j.status==='Needs input'?'needs':''}">${esc(j.status)}</span>${j.manual?'<small>Manually marked '+esc(j.manual)+'</small>':''}</td><td>${j.filled.length?'<details><summary>'+j.filled.length+' filled fields</summary>'+j.filled.map(esc).join('<br>')+'</details>':''}${[...j.missing,...j.concerns].map(x=>'<p>'+esc(x)+'</p>').join('')||'<small>Pending preparation or your final review.</small>'}</td><td class="actions"><button data-id="${j.id}" data-action="focus">Focus Safari</button><button data-id="${j.id}" data-action="resume">Resume job</button><button data-id="${j.id}" data-action="remove">Remove</button><button data-id="${j.id}" data-action="scan">Scan and learn answers</button><details><summary>More actions</summary><button data-id="${j.id}" data-action="account">Record account</button><label>Job country (explicit)<input class="country" placeholder="e.g. CA" value="${esc(j.country||'')}" data-country="${j.id}"></label><button data-id="${j.id}" data-action="reopen">Reopen closed window</button><button data-id="${j.id}" data-action="submitted">Mark submitted</button><button data-id="${j.id}" data-action="skipped">Mark skipped</button></details></td></tr>`).join('')+'</tbody></table>':'<p class="muted">Your batch will appear here.</p>';document.querySelectorAll('[data-action]').forEach(b=>b.onclick=act(async()=>{if(b.dataset.action==='reopen'&&!confirm('Create a new window? Only do this if the saved application window is closed.'))return;if(b.dataset.action==='scan'){
     scan={id:b.dataset.id,...await api('job',{id:b.dataset.id,action:'scan'})};
     const entries=Object.entries(scan.answers);
     if(!entries.length){message('No reusable completed answers found on the current page.');return;}
-    $('#learn-items').innerHTML=entries.map(([key,answer])=>'<p><label><input type="checkbox" value="'+esc(key)+'"> '+esc(answer.label)+' <strong>'+esc(answer.value)+'</strong></label></p>').join('');
+    $('#learn-items').innerHTML=entries.map(([key,answer])=>'<p><label><input type="checkbox" data-answer value="'+esc(key)+'"> '+esc(answer.label)+' <strong>'+esc(answer.value)+'</strong></label>'+(key==='are you at least 18 years old'?'':'<br><label><input type="checkbox" data-share value="'+esc(key)+'"> Reuse across employers</label>')+'</p>').join('');
+    $('#learn-error').hidden=true;
     $('#learning').showModal();
     return;
 }await api('job',{id:b.dataset.id,action:b.dataset.action,country:document.querySelector('[data-country="'+b.dataset.id+'"]').value});await refresh()}));}
