@@ -61,8 +61,9 @@
   }
   function experiencePage() {
     const fixture = location.hostname==='127.0.0.1' && document.documentElement.dataset.jobprepFixture==='experience';
-    const jpmorgan = location.hostname==='jpmc.fa.oraclecloud.com' && /\/apply\/section\/\d+\/?$/.test(location.pathname);
-    if(!fixture && !jpmorgan)return null;
+    const oracle = location.hostname.endsWith('.oraclecloud.com') &&
+      /^\/hcmUI\/CandidateExperience\/[^/]+\/sites\/[^/]+\/job\/\d+\/apply\/section\/\d+\/?$/.test(location.pathname);
+    if(!fixture && !oracle)return null;
     const open = [...document.querySelectorAll('button[id^=profileItemsAddButton-]')].find(e=>visible(e) && norm(e.innerText).toUpperCase()==='ADD EXPERIENCE');
     const employer = [...document.querySelectorAll('input[name=employerName]')].find(visible);
     const editor = employer?.closest('.standard-apply-flow-profile-item');

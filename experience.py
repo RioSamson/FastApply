@@ -1,4 +1,4 @@
-"""Fill JP Morgan's inline experience editor using the saved employment history."""
+"""Fill Oracle's inline experience editor using the saved employment history."""
 import calendar
 import re
 import time
@@ -13,6 +13,7 @@ def desired_fields(row):
         'countryCode': row.get('country'),
         'employerCity': row.get('city'),
         'achievements': row.get('description'),
+        'responsibilities': row.get('description'),
         'currentJobFlag': row.get('current', row.get('end_date') == ''),
         'Internal': row.get('internal'),
     }
@@ -43,9 +44,14 @@ def fill_experience(run, snapshot, page, rows):
     def editor_op(action, **payload):
         return run(action, {'url': url, **payload})
 
-    if page['experience']['editor']:
-        return filled, ['Finish or cancel the open Experience editor, then resume FastApply.']
     rows = [row for row in rows if row.get('title') and row.get('company')]
+    if page['experience']['editor']:
+        existing = {field['key']:field['value'] for field in page['experience']['fields']}
+        matches = [row for row in rows if norm(existing.get('jobTitle') or '') == norm(row['title'])
+                   and (not existing.get('employerName') or norm(existing['employerName']) == norm(row['company']))]
+        if len(matches) != 1:
+            return filled, ['Finish or cancel the open Experience editor, then resume FastApply.']
+        rows = matches + [row for row in rows if row is not matches[0]]
     for row in rows:
         title, company = row['title'], row['company']
         cards = matches_title(page['experience']['cards'], title)
@@ -58,15 +64,16 @@ def fill_experience(run, snapshot, page, rows):
         if not cards and not {'year-startDate', 'month-startDate'} <= desired_fields(row).keys():
             problems.append(f'{title}: add a start month and year to the FastApply profile.')
             continue
-        result = editor_op('experience-open', id=cards[0]['id'] if cards else None)
-        if not result['filled']:
-            problems.append(f'{title}: could not open the Experience editor.')
-            break
-        page = refresh()
-        if not page or not page['experience']['editor']:
-            problems.append(f'{title}: the Experience editor did not load.')
-            break
-
+        was_open = page['experience']['editor']
+        if not was_open:
+            result = editor_op('experience-open', id=cards[0]['id'] if cards else None)
+            if not result['filled']:
+                problems.append(f'{title}: could not open the Experience editor.')
+                break
+            page = refresh()
+            if not page or not page['experience']['editor']:
+                problems.append(f'{title}: the Experience editor did not load.')
+                break
         changed = False
         failed = False
         desired = desired_fields(row)
@@ -119,10 +126,10 @@ def fill_experience(run, snapshot, page, rows):
         if missing or failed:
             problems.append(f'{title}: verify the Experience editor in Safari.')
             break
-        if not cards and not changed:
+        if not cards and not was_open and not changed:
             problems.append(f'{title}: the blank editor did not accept the saved role.')
             break
-        editor_op('experience-save' if changed else 'experience-cancel')
+        editor_op('experience-save' if changed or was_open else 'experience-cancel')
         for _ in range(15):
             page = refresh()
             if not page or not page['experience']['editor']:
