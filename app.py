@@ -62,10 +62,82 @@ def remember_contact_fields(store,job,snapshot,profile):
 def answer_scope(job):
     return job['company'].casefold()+'|'+(urllib.parse.urlsplit(job.get('final_url') or '').hostname or '')
 
-def reusable_scope(key, entry, share, job):
-    if key=='are you at least 18 years old' or (key in share and learnable(entry['label'])):
-        return 'shared'
-    return answer_scope(job)
+def answer_memory(state, job):
+    memory=state.get('learned_answers',{})
+    return {**memory.get('shared',{}), **memory.get(answer_scope(job),{})}
+
+
+def page_key(snapshot):
+    return snapshot['url'].split('#',1)[0]
+
+
+def learning_key(field):
+    return answer_key(field.get('question') or field['label'])
+
+
+def equal_answer(left,right):
+    def normalized(value):
+        return ' '.join(str(value).split()).casefold()
+    if isinstance(left,list) and isinstance(right,list):
+        return {normalized(value) for value in left}=={normalized(value) for value in right}
+    return not isinstance(left,list) and not isinstance(right,list) and normalized(left)==normalized(right)
+
+
+def scan_changes(store,job,snapshot):
+    fields=snapshot['fields']
+    answers=scan_answers(fields)
+    baseline=job.get('learning_baselines',{}).get(page_key(snapshot))
+    saved=answer_memory(store.state,job)
+    profile=store.profile()
+    configured=profile.get('answers',{})
+    predicted=scan_answers(predicted_fields(fields,profile,job.get('country'))) if baseline is None else {}
+    manually_changed={learning_key(field) for field in fields if field.get('manual')}
+    memory=store.state.get('learned_answers',{})
+    employer_memory=memory.get(answer_scope(job),{})
+    changes={}
+    for key,entry in answers.items():
+        stored=saved.get(key,configured.get(key,{})).get('value')
+        old_value=(baseline or {}).get(key)
+        value=entry['value']
+        if any(equal_answer(value,previous) for previous in (stored, old_value)):
+            continue
+        if baseline is None and key not in manually_changed and stored is None:
+            continue
+        if stored is None and key in predicted and equal_answer(value,predicted[key]['value']) and old_value is None:
+            continue
+        previous=stored if stored is not None else old_value
+        scope='shared' if key=='are you at least 18 years old' or (
+            key not in employer_memory and key in memory.get('shared',{})) else 'employer'
+        changes[key]={**entry,'kind':'update' if previous is not None else 'new','scope':scope}
+        if previous is not None:
+            changes[key]['previous']=previous
+    return changes
+
+
+def predicted_fields(fields,profile,country):
+    blank=[dict(field,value='', selectedLabel='', groupAnswered=False, invalid=False) for field in fields]
+    planned={answer['id']:answer for answer in plan(blank,profile,country)['answers']}
+    for field in blank:
+        if (answer:=planned.get(field['id'])):
+            value=answer.get('value',field.get('option') or field['label'])
+            field['value']=value
+            field['selectedLabel']=next((option['label'] for option in field.get('options',[]) if option['value']==value),'')
+    return blank
+
+
+def record_learning_baseline(store,job,snapshot,filled_keys=(),exclude=()):
+    if not snapshot['fields']:
+        return
+    current={key:entry['value'] for key,entry in scan_answers(snapshot['fields']).items() if key not in exclude}
+    key=page_key(snapshot)
+    with store.lock:
+        baselines=job.setdefault('learning_baselines',{})
+        previous=baselines.get(key)
+        if previous is None:
+            baselines[key]=current
+        else:
+            previous.update({answer:current[answer] for answer in filled_keys if answer in current})
+        store.save()
 
 
 def scan_answers(fields):
@@ -86,7 +158,7 @@ def scan_answers(fields):
         if key not in candidates:candidates[key]=entry
         elif candidates[key]!=entry:candidates[key]=None
     for field in fields:
-        if not field.get('choiceGroup') or not field['value'] or not learnable(field['question']):
+        if field.get('invalid') or not field.get('choiceGroup') or not field['value'] or not learnable(field['question']):
             continue
         label=field['question']
         key=answer_key(label)
@@ -209,6 +281,8 @@ class Runner:
             profile.setdefault('answers',{}).setdefault('when would you be available to start',{'value':profile['availability']['start_date']})
         protected=set(j.get('protected_fields',[]))
         attempted_choices=set()
+        learning_page=None
+        learning_filled=set()
         attempted_cards=set()
         editing=None
         experience_checked=False
@@ -232,6 +306,13 @@ class Runner:
                     return
                 continue
             def signature(f):return s['url'].split('#')[0]+'|'+f.get('section','')+'|'+str(f.get('sectionIndex',0))+'|'+f['label']
+            if page_key(s)!=learning_page:
+                learning_page=page_key(s)
+                learning_filled.clear()
+                if learning_page not in j.get('learning_baselines',{}):
+                    record_learning_baseline(self.store,j,s,exclude={
+                        learning_key(field) for field in s['fields'] if field.get('manual')
+                    })
             if s.get('locationNeeded'):
                 address=profile.get('address',{})
                 region=address.get('region')
@@ -245,6 +326,7 @@ class Runner:
                         selection=self.js(j,'location-select',location)
                         if selection['filled']:
                             filled.extend(selection['filled'])
+                            learning_filled.add(answer_key('Location'))
                             break
                     s=self.snapshot(j)
                     if not s:return
@@ -255,13 +337,7 @@ class Runner:
                 concerns.extend(agreement['issues'])
                 s=self.snapshot(j)
                 if not s:return
-            for scope in (answer_scope(j),'shared'):
-                for label,saved in self.store.state.get('learned_answers',{}).get(scope,{}).items():
-                    answers=profile.setdefault('answers',{})
-                    if saved.get('demographic_approved') and not answers.get(label,{}).get('demographic_approved'):
-                        answers[label]=saved
-                    else:
-                        answers.setdefault(label,saved)
+            profile.setdefault('answers',{}).update(answer_memory(self.store.state,j))
             remember_contact_fields(self.store,j,s,profile)
             if not editing:
                 for card in s.get('cards',[]):
@@ -293,6 +369,10 @@ class Runner:
             result=self.js(j,'fill',{'answers':[a for a in p['answers'] if not a.get('custom')]})
             filled.extend(result['filled']);concerns.extend(result['issues'])
             fields_by_id={f['id']:f for f in s['fields']}
+            for item in p['answers']:
+                field=fields_by_id[item['id']]
+                if not item.get('custom') and (field['label'] in result['filled'] or field.get('question') in result['filled']):
+                    learning_filled.add(learning_key(field))
             for answer in p['answers']:
                 if not answer.get('custom'):continue
                 key=(signature(fields_by_id[answer['id']]),str(answer['value']))
@@ -303,7 +383,9 @@ class Runner:
                     time.sleep(.2)
                     cr=self.js(j,'custom-select',answer)
                     if cr['filled']:break
-                if not cr['filled']:
+                if cr['filled']:
+                    learning_filled.add(learning_key(fields_by_id[answer['id']]))
+                else:
                     self.js(j,'custom-close',answer)
                 filled.extend(cr['filled'])
                 concerns.extend(fields_by_id[answer['id']]['label']+': '+issue for issue in cr['issues'])
@@ -327,6 +409,7 @@ class Runner:
                 time.sleep(.4)
                 s=self.snapshot(j)
                 if not s:return
+            record_learning_baseline(self.store,j,s,learning_filled if page_key(s)==learning_page else ())
             missing=[]
             for f in s['fields']:
                 if f.get('choiceGroup'):
@@ -449,7 +532,9 @@ def make_handler(store,runner,token,fixture,port):
                             if not j.get('window'):raise ValueError('No Safari window opened yet')
                             runner.browser.focus(j['window'])
                         elif action in ('resume','reopen'):
-                            if action=='reopen':j['window']=None;j['opening_pending']=False;j['protected_fields']=[]
+                            if action=='reopen':
+                                j.update(window=None,opening_pending=False,protected_fields=[])
+                                j.pop('learning_baselines',None)
                             if j.get('opening_pending'):raise ValueError('Interrupted during window creation. Inspect Safari first, then explicitly Reopen if needed.')
                             j['manual']=None
                             j['country']=body.get('country') or j.get('country');j['status']='Queued';j['missing']=[];j['concerns']=[];store.state['mode']='running'
@@ -458,23 +543,24 @@ def make_handler(store,runner,token,fixture,port):
                             snap=runner.js(j,'inspect')
                             if not snap or not j.get('final_url') or urllib.parse.urlsplit(snap['url']).netloc!=urllib.parse.urlsplit(j['final_url']).netloc:
                                 raise ValueError('Open the tracked employer application before scanning.')
-                            candidates=scan_answers(snap['fields'])
-                            if action=='scan':return self.send({'answers':candidates})
+                            candidates=scan_changes(store,j,snap)
+                            if action=='scan':
+                                if page_key(snap) not in j.get('learning_baselines',{}):
+                                    # Set the reference on older or manually reached pages without accepting answers.
+                                    record_learning_baseline(store,j,snap,
+                                                             exclude=candidates)
+                                return self.send({'answers':candidates})
                             shown=body.get('answers',{})
-                            if any(key not in candidates or entry!=candidates[key] for key,entry in shown.items()):
-                                raise ValueError('The form changed. Scan it again before saving.')
+                            if not isinstance(shown,dict) or any(entry!=candidates.get(key) for key,entry in shown.items()):
+                                raise ValueError('The form changed. Scan again.')
                             learned=store.state.setdefault('learned_answers',{})
-                            share=body.get('share',[])
-                            if not isinstance(share,list) or any(key not in shown for key in share):
-                                raise ValueError('Select an answer before sharing it across employers.')
                             for key,entry in shown.items():
-                                scope=reusable_scope(key,entry,share,j)
+                                scope='shared' if entry['scope']=='shared' else answer_scope(j)
                                 saved={'value':entry['value']}
                                 if entry.get('demographic'):
                                     saved['demographic_approved']=True
                                 learned.setdefault(scope,{})[key]=saved
-                                if scope=='shared':
-                                    learned.get(answer_scope(j),{}).pop(key,None)
+                                j.setdefault('learning_baselines',{}).setdefault(page_key(snap),{})[key]=entry['value']
                             store.save()
                             return self.send({'saved':len(shown)})
                         elif action=='account':

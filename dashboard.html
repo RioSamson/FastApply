@@ -73,11 +73,28 @@ details ul{margin:5px 0;padding-left:20px}
 .actions button[data-action=submitted]{color:var(--pink)}
 .actions button[data-action=remove]{color:#eeaaa5}
 #message:not(:empty){margin:0 0 12px;padding:8px 12px;border:1px solid #703861;border-radius:6px;background:#291225;color:#ffb4e4}
-dialog{width:min(570px,calc(100% - 28px));max-height:85vh;overflow:auto;color:var(--text);background:var(--panel);border:1px solid #66447b;border-radius:12px;padding:22px}
-dialog::backdrop{background:#000b}
-#learn-items{margin:12px 0}
-#learn-items p{border-top:1px solid var(--line);padding:8px 0}
-#learn-error{color:var(--warn);margin-bottom:10px}
+#learning{width:min(1120px,calc(100vw - 32px));max-height:min(82dvh,760px);color:var(--text);background:var(--panel);border:1px solid #66447b;border-radius:14px;padding:0;overflow:hidden}
+#learning::backdrop{background:#000c}
+#learning form{display:flex;flex-direction:column;max-height:min(82dvh,760px)}
+.learn-header,.learn-footer{padding:15px 20px;flex:none}
+.learn-header{border-bottom:1px solid var(--line)}
+.learn-header h2{font:700 17px var(--mono)}
+.learn-footer{border-top:1px solid var(--line)}
+.learn-footer .controls{justify-content:flex-end}
+#learn-items{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(330px,100%),1fr));gap:14px;padding:15px 20px;overflow:auto;min-height:0}
+.learn-group{min-width:0}
+.learn-group:only-child .learn-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:0 10px}
+.learn-group h3{font:600 12px var(--mono);margin:0 0 8px;color:var(--muted)}
+.learn-choice{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:9px;padding:9px 10px;margin-bottom:6px;border:1px solid var(--line);border-radius:6px;background:var(--well);cursor:pointer;overflow-wrap:anywhere}
+.learn-choice:hover,.learn-choice:focus-within{border-color:var(--purple)}
+.learn-choice input{margin:3px 0 0}
+.learn-choice strong,.learn-choice small{display:block}
+.learn-choice strong{font-size:12px;font-weight:600}
+.learn-choice .value{color:var(--purple)}
+.learn-choice.update{border-left:2px solid var(--pink)}
+.learn-choice.update .value{color:var(--pink)}
+.learn-choice del{color:var(--muted)}
+#learn-error{color:var(--warn);margin-bottom:8px}
 @media(max-width:760px){
     body{padding:0 15px 24px}
     .setup-grid{grid-template-columns:1fr;gap:0}
@@ -132,11 +149,13 @@ dialog::backdrop{background:#000b}
 <main id="submitted-view" hidden>
 <section><h2>Submitted applications</h2><div id="submitted-jobs" class="table-scroll"></div></section>
 </main>
-<dialog id="learning"><form method="dialog">
-<div class="section-head"><h2>Scan and learn answers</h2></div>
-<small>Check answers to save, including any optional disclosures you want reused.</small>
-<div id="learn-items"></div><p id="learn-error" role="alert" hidden></p>
-<div class="controls"><button value="cancel" class="secondary">Cancel</button><button type="button" id="save-answers">Save selected answers</button></div>
+<dialog id="learning" aria-labelledby="learn-title"><form method="dialog">
+<header class="learn-header"><h2 id="learn-title">Review answer changes</h2><small id="learn-count"></small></header>
+<div id="learn-items"></div>
+<footer class="learn-footer">
+    <p id="learn-error" role="alert" hidden></p>
+    <div class="controls"><button value="cancel" class="secondary">Cancel</button><button type="button" id="save-answers" disabled>Save selected</button></div>
+</footer>
 </form></dialog>
 <script>
 const $=s=>document.querySelector(s),token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('jobprep-token');if(token)sessionStorage.setItem('jobprep-token',token);history.replaceState(null,'',location.pathname+location.search);
@@ -200,6 +219,31 @@ $('#check-resume').onclick=act(async()=>{const r=await api('resume-check',{});me
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=act(async()=>{await api('control',{mode:b.dataset.mode});await refresh()}));
 $('#passwords').onclick=act(async()=>{await api('passwords',{})});
 let scan=null;
+function answerText(value){return esc(Array.isArray(value)?value.join(', '):value);}
+function answerCard(key,answer){
+    const badges=[answer.scope==='shared'?'Across employers':'',answer.demographic?'Optional disclosure':''].filter(Boolean);
+    return `<label class="learn-choice ${answer.kind}">
+        <input type="checkbox" data-answer value="${esc(key)}">
+        <span><strong>${esc(answer.label)}</strong>
+        ${answer.kind==='update'?`<del>${answerText(answer.previous)}</del> <span aria-hidden="true">→</span> `:''}<span class="value">${answerText(answer.value)}</span>
+        ${badges.length?`<small>${badges.join(' · ')}</small>`:''}</span>
+    </label>`;
+}
+function renderAnswerChanges(answers){
+    const entries=Object.entries(answers);
+    $('#learn-items').innerHTML=[['update','Update saved answer'],['new','Learn new answer']].map(([kind,title])=>{
+        const choices=entries.filter(([,answer])=>answer.kind===kind);
+        return choices.length?`<div class="learn-group"><h3>${title} (${choices.length})</h3><div class="learn-cards">${choices.map(([key,answer])=>answerCard(key,answer)).join('')}</div></div>`:'';
+    }).join('');
+    updateLearnCount();
+}
+function updateLearnCount(){
+    const items=$('#learn-items');
+    const count=items.querySelectorAll('input:checked').length;
+    $('#learn-count').textContent=count+' / '+items.querySelectorAll('input').length+' selected';
+    $('#save-answers').disabled=!count;
+}
+$('#learn-items').onchange=updateLearnCount;
 $('#save-answers').onclick=async()=>{
     const button=$('#save-answers'), error=$('#learn-error');
     error.hidden=true;
@@ -207,15 +251,14 @@ $('#save-answers').onclick=async()=>{
     try{
         const selected=Object.fromEntries([...$('#learn-items').querySelectorAll('input[data-answer]:checked')].map(e=>[e.value,scan.answers[e.value]]));
         if(!Object.keys(selected).length)throw new Error('Select at least one answer to save.');
-        const share=[...$('#learn-items').querySelectorAll('input[data-share]:checked')].map(e=>e.value).filter(key=>Object.hasOwn(selected,key));
-        const result=await api('job',{id:scan.id,action:'learn',answers:selected,share});
+        const result=await api('job',{id:scan.id,action:'learn',answers:selected});
         $('#learning').close();
         message(result.saved+' answers saved for future applications.');
     }catch(e){
         error.textContent=e.message;
         error.hidden=false;
     }finally{
-        button.disabled=false;
+        updateLearnCount();
     }
 };
 function showView(view) {
@@ -347,9 +390,8 @@ $('#jobs').onclick=act(async event=>{
     if(action==='reopen'&&!confirm('Create a new window? Only do this if the saved application window is closed.'))return;
     if(action==='scan'){
     scan={id,...await api('job',{id,action:'scan'})};
-    const entries=Object.entries(scan.answers);
-    if(!entries.length){message('No reusable completed answers found on the current page.');return;}
-    $('#learn-items').innerHTML=entries.map(([key,answer])=>'<p><label><input type="checkbox" data-answer value="'+esc(key)+'"> '+esc(answer.label)+(answer.demographic?' (optional disclosure)':'')+' <strong>'+esc(answer.value)+'</strong></label>'+(key==='are you at least 18 years old'?'':'<br><label><input type="checkbox" data-share value="'+esc(key)+'"> Reuse across employers</label>')+'</p>').join('');
+    if(!Object.keys(scan.answers).length){message('No new or changed answers.');return;}
+    renderAnswerChanges(scan.answers);
     $('#learn-error').hidden=true;
     $('#learning').showModal();
     return;

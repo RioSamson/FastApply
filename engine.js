@@ -124,6 +124,27 @@
     document.addEventListener('change',e=>{if(e.isTrusted && e.target.matches('input[type=text],input[type=email],input[type=tel],input[type=url],textarea'))e.target.dataset.fastapplyManual='yes';},true);
     window.__fastapplyObserve=true;
   }
+  if(!window.__fastapplyLearnObserve){
+    const mark=e=>{
+      if(e?.matches('input,textarea,select,[role=combobox],[role=radio]'))e.dataset.fastapplyManual='yes';
+    };
+    for(const type of ['input','change'])document.addEventListener(type,event=>{
+      if(event.isTrusted)mark(event.target);
+    },true);
+    document.addEventListener('click',event=>{
+      if(!event.isTrusted)return;
+      const choice=event.target.closest?.('[role=option],[role=gridcell],[role=radio]');
+      if(!choice)return;
+      if(choice.matches('[role=radio]')){mark(choice);return;}
+      const list=choice.closest('[role=listbox],[role=grid]');
+      if(list?.id){
+        const box=[...document.querySelectorAll('[role=combobox]')].find(e=>
+          [e.getAttribute('aria-controls'),e.getAttribute('aria-owns')].includes(list.id));
+        mark(box);
+      }
+    },true);
+    window.__fastapplyLearnObserve=true;
+  }
   if(op==='inspect') return JSON.stringify(snapshot());
   const filled=[], issues=[];
   // Safety guard applies only during this synchronous filling operation; user submission stays available afterward.
