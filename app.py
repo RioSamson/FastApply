@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Single-user local application. Python 3.10+, no third-party dependencies."""
+from datetime import datetime, timezone
 import argparse, json, os, pathlib, secrets, threading, time, urllib.parse, urllib.request, http.server, signal, sys, fcntl
 from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile, answer_key, demographic, learnable, preferred_location
 from experience import fill_experience
@@ -462,7 +463,10 @@ def make_handler(store,runner,token,fixture,port):
                             if not host:raise ValueError('Open the employer site first.')
                             accounts=store.state.setdefault('accounts',{})
                             accounts[host]={'company':j['company'],'site':'https://'+host,'email':store.profile().get('email') or ''}
-                        elif action in ('submitted','skipped'):j['manual']=action
+                        elif action=='submitted':
+                            j['manual']='submitted'
+                            j.setdefault('submitted_at',datetime.now(timezone.utc).isoformat())
+                        elif action=='skipped':j['manual']=action
                         else:raise ValueError('Unknown action')
                         store.save()
                     return self.send({'ok':True})

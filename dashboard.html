@@ -1,19 +1,28 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>FastApply · Safari workspace</title>
 <style>
-:root{font:16px -apple-system,BlinkMacSystemFont,sans-serif;color:#193b33;background:#f3f5f1}body{max-width:1180px;margin:35px auto;padding:0 25px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:34px;margin:8px 0}h2{font-size:21px}.muted,small{color:#536a62}.banner{background:#dce9c5;border-left:4px solid #52783e;padding:15px 20px;margin:24px 0}section{background:white;border:1px solid #d8e0d9;border-radius:12px;padding:24px;margin:20px 0}textarea,input,select{font:inherit;padding:10px;border:1px solid #abbdb2;border-radius:6px;box-sizing:border-box}textarea{width:100%;min-height:180px;resize:vertical}button{background:#245d49;color:white;border:0;border-radius:6px;padding:11px 15px;font:inherit;cursor:pointer;margin:6px 7px 6px 0}button.secondary{background:#e9eee7;color:#254b3d}button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible{outline:3px solid #cc9818}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #e3e8e1;vertical-align:top}td small{display:block;margin-top:5px}a{color:#27634a;overflow-wrap:anywhere}.pill{font-size:13px;background:#edf0e8;padding:5px 9px;display:inline-block;border-radius:20px;white-space:nowrap}.ready{background:#d8ebc6}.needs{background:#ffedc9}details{margin:12px 0}summary{cursor:pointer}pre{white-space:pre-wrap}#message{position:sticky;top:0;z-index:2;background:#203f35;color:white;padding:12px;display:none}#profile{font:13px ui-monospace,monospace;min-height:360px}#jobs{overflow:auto}.actions{min-width:190px}.actions button{font-size:13px;padding:7px}.stats{font-size:14px} .country{width:110px;font-size:13px} @media(max-width:700px){body{padding:0 12px}header{display:block}section{padding:16px}th:nth-child(3){min-width:200px}}</style>
+:root{font:16px -apple-system,BlinkMacSystemFont,sans-serif;color:#193b33;background:#f3f5f1}body{max-width:1180px;margin:35px auto;padding:0 25px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:34px;margin:8px 0}h2{font-size:21px}.muted,small{color:#536a62}.banner{background:#dce9c5;border-left:4px solid #52783e;padding:15px 20px;margin:24px 0}section{background:white;border:1px solid #d8e0d9;border-radius:12px;padding:24px;margin:20px 0}textarea,input,select{font:inherit;padding:10px;border:1px solid #abbdb2;border-radius:6px;box-sizing:border-box}textarea{width:100%;min-height:180px;resize:vertical}button{background:#245d49;color:white;border:0;border-radius:6px;padding:11px 15px;font:inherit;cursor:pointer;margin:6px 7px 6px 0}button.secondary{background:#e9eee7;color:#254b3d}button:disabled{opacity:.5;cursor:wait}button:focus-visible,a:focus-visible{outline:3px solid #cc9818}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid #e3e8e1;vertical-align:top}td small{display:block;margin-top:5px}a{color:#27634a;overflow-wrap:anywhere}.pill{font-size:13px;background:#edf0e8;padding:5px 9px;display:inline-block;border-radius:20px;white-space:nowrap}.ready{background:#d8ebc6}.needs{background:#ffedc9}details{margin:12px 0}summary{cursor:pointer}pre{white-space:pre-wrap}#message{position:sticky;top:0;z-index:2;background:#203f35;color:white;padding:12px;display:none}#profile{font:13px ui-monospace,monospace;min-height:360px}#jobs{overflow:auto}.actions{min-width:190px}.actions button{font-size:13px;padding:7px}.stats{font-size:14px} .country{width:110px;font-size:13px} @media(max-width:700px){body{padding:0 12px}header{display:block}section{padding:16px}th:nth-child(3){min-width:200px}}.view-tabs{display:flex;gap:8px;margin-top:20px}.view-tabs a{padding:10px 14px;border-radius:6px;text-decoration:none}.view-tabs a[aria-current="page"]{background:#245d49;color:white}.review details{margin:0 0 8px}.review ul{margin:6px 0;padding-left:20px}.actions{width:230px}.actions button{margin:3px 5px 3px 0}#submitted-jobs{overflow:auto}</style>
 <header><div><small>LOCAL WORKSPACE / SAFARI</small><h1>FastApply</h1><p class="muted">Your job search, one application at a time.</p></div><span id="mode" class="pill">Paused</span></header>
 <div class="banner"><strong>You review and submit every application.</strong> This helper fills supported fields in ordinary Safari tabs. It never clicks final submission or accepts legal terms. Employer pages may autosave entered data.</div><div id="message" role="status"></div>
+<nav class="view-tabs" aria-label="Application views">
+<a href="?view=workspace" data-view="workspace">Application workspace</a>
+<a href="?view=submitted" data-view="submitted">Submitted applications <span id="submitted-count"></span></a>
+</nav>
+<main id="workspace-view">
 <section><h2>1. Your profile & resume</h2><details id="profile-section"><summary>Edit saved local profile</summary><p>Use null for unknown values. Put the absolute path to your PDF/DOCX in <code>resume_path</code>. Text values must use double quotes: <code>"first_name": "Alex"</code>. Education and employment contain objects; skills contain quoted strings. Saving writes to the local file below and persists between launches. No credentials belong here.</p><small id="profile-path"></small><textarea id="profile" aria-label="Profile JSON" spellcheck="false"></textarea><button id="save-profile">Save profile</button><button class="secondary" id="check-resume">Validate resume</button></details></section>
 <section><h2>2. Paste your SWElist email</h2><textarea id="email" placeholder="Paste directly from your email or webpage — links are kept automatically…" aria-label="Email content"></textarea><button id="preview">Preview jobs</button><button class="secondary" id="sample">Load sample jobs</button><button class="secondary" id="demo">Load local fixtures</button><div id="preview-result"></div><button id="start" disabled>Start batch</button><small>All parsed jobs are included. No filtering by fit or location.</small></section>
 <section><header><h2>3. Application workspace</h2><span class="stats" id="stats"></span></header><button class="secondary" data-mode="paused">Pause</button><button data-mode="running">Resume queue</button><button class="secondary" data-mode="cancelled">Cancel queue</button><p class="muted">Pause/cancel takes effect between operations. Forms remain open. Resume job after handling login, questions, or an intermediate step. Existing values are preserved.</p><div id="jobs"></div></section>
 <section><h2>Employer accounts</h2><p>When an employer asks you to register, use Safari's suggested password and save it in Passwords. If Safari offers <strong>Fill from email</strong>, select it in the verification field.</p><button class="secondary" id="passwords">Open Passwords</button><div id="accounts"></div></section>
+</main>
+<main id="submitted-view" hidden>
+<section><h2>Submitted applications</h2><div id="submitted-jobs"></div></section>
+</main>
 <dialog id="learning"><form method="dialog"><h2>Scan and learn answers</h2><p>Choose which answers to reuse. Answers default to this employer. Turn on reuse only for answers that apply to the same question at other employers. Your approved 18-or-older answer is shared automatically. Selecting a demographic answer allows FastApply to fill that exact question again.</p><div id="learn-items"></div><p id="learn-error" role="alert" hidden></p><button value="cancel" class="secondary">Cancel</button><button type="button" id="save-answers">Save selected answers</button></form></dialog>
 <script>
-const $=s=>document.querySelector(s),token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('jobprep-token');if(token)sessionStorage.setItem('jobprep-token',token);history.replaceState(null,'',location.pathname);
+const $=s=>document.querySelector(s),token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('jobprep-token');if(token)sessionStorage.setItem('jobprep-token',token);history.replaceState(null,'',location.pathname+location.search);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function message(s){$('#message').style.display='block';$('#message').textContent=s;}
 async function api(path,body){const r=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers:{'X-JobPrep-Token':token,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const v=await r.json();if(!r.ok)throw Error(v.error);return v}
-const act=f=>async()=>{try{await f()}catch(e){message(e.message)}};
+const act=f=>async(...args)=>{try{await f(...args)}catch(e){message(e.message)}};
 // Read both clipboard representations during the user's paste gesture.
 // Parse HTML in an inert template: never insert clipboard HTML into the live page.
 function emailClipboardText(html, plain) {
@@ -88,14 +97,94 @@ $('#save-answers').onclick=async()=>{
         button.disabled=false;
     }
 };
-let last='';async function refresh(){const s=await api('state');$('#mode').textContent=s.mode;$('#stats').textContent=s.jobs.filter(j=>j.status==='Ready for review').length+' ready / '+s.jobs.length+' total';$('#accounts').innerHTML=Object.values(s.accounts||{}).map(a=>'<p><a target="_blank" rel="noreferrer" href="'+esc(a.site)+'">'+esc(a.company)+'</a> '+esc(a.email)+'</p>').join('')||'<small>Use Record account on a job after registering.</small>';const serialized=JSON.stringify(s.jobs);if(serialized===last)return;last=serialized;$('#jobs').innerHTML=s.jobs.length?'<table><thead><tr><th>Job</th><th>Status</th><th>Review notes</th><th>Actions</th></tr></thead><tbody>'+s.jobs.map(j=>`<tr><td><strong>${esc(j.company)}</strong><small>${esc(j.title)}</small><small><a target="_blank" rel="noreferrer" href="${esc(j.original_url)}">Listing</a></small>${j.final_url?'<small>Employer: '+esc(new URL(j.final_url).hostname)+'</small>':''}</td><td><span class="pill ${j.status==='Ready for review'?'ready':j.status==='Needs input'?'needs':''}">${esc(j.status)}</span>${j.manual?'<small>Manually marked '+esc(j.manual)+'</small>':''}</td><td>${j.filled.length?'<details><summary>'+j.filled.length+' filled fields</summary>'+j.filled.map(esc).join('<br>')+'</details>':''}${[...j.missing,...j.concerns].map(x=>'<p>'+esc(x)+'</p>').join('')||'<small>Pending preparation or your final review.</small>'}</td><td class="actions"><button data-id="${j.id}" data-action="focus">Focus Safari</button><button data-id="${j.id}" data-action="resume">Resume job</button><button data-id="${j.id}" data-action="remove">Remove</button><button data-id="${j.id}" data-action="scan">Scan and learn answers</button><details><summary>More actions</summary><button data-id="${j.id}" data-action="account">Record account</button><label>Job country (explicit)<input class="country" placeholder="e.g. CA" value="${esc(j.country||'')}" data-country="${j.id}"></label><button data-id="${j.id}" data-action="reopen">Reopen closed window</button><button data-id="${j.id}" data-action="submitted">Mark submitted</button><button data-id="${j.id}" data-action="skipped">Mark skipped</button></details></td></tr>`).join('')+'</tbody></table>':'<p class="muted">Your batch will appear here.</p>';document.querySelectorAll('[data-action]').forEach(b=>b.onclick=act(async()=>{if(b.dataset.action==='reopen'&&!confirm('Create a new window? Only do this if the saved application window is closed.'))return;if(b.dataset.action==='scan'){
-    scan={id:b.dataset.id,...await api('job',{id:b.dataset.id,action:'scan'})};
+function showView(view) {
+    $('#workspace-view').hidden=view==='submitted';
+    $('#submitted-view').hidden=view!=='submitted';
+    document.querySelectorAll('[data-view]').forEach(link=>{
+        if(link.dataset.view===view)link.setAttribute('aria-current','page');
+        else link.removeAttribute('aria-current');
+    });
+}
+function viewFromUrl(){
+    showView(new URLSearchParams(location.search).get('view')==='submitted'?'submitted':'workspace');
+}
+document.querySelectorAll('[data-view]').forEach(link=>link.onclick=event=>{
+    if(event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+    event.preventDefault();
+    history.pushState(null,'',link.href);
+    viewFromUrl();
+});
+window.addEventListener('popstate',viewFromUrl);
+viewFromUrl();
+
+function jobTitle(job){
+    return `<strong>${esc(job.company)}</strong><small>${esc(job.title)}</small>
+        <small><a target="_blank" rel="noreferrer" href="${esc(job.original_url)}">Listing</a></small>`;
+}
+function reviewSection(title, items, empty){
+    if(!items.length)return `<details><summary>${title} (0)</summary><small>${empty}</small></details>`;
+    return `<details><summary>${title} (${items.length})</summary><ul>${items.map(item=>'<li>'+esc(item)+'</li>').join('')}</ul></details>`;
+}
+const jobActions=[
+    ['focus','Focus Safari'],['resume','Resume job'],['scan','Scan and learn answers'],
+    ['reopen','Reopen closed window'],['submitted','Mark submitted'],['remove','Remove']
+];
+function workspaceRow(job){
+    const statusClass=job.status==='Ready for review'?'ready':job.status==='Needs input'?'needs':'';
+    const concerns=job.concerns||[];
+    const actions=jobActions.map(([action,label])=>`<button data-id="${esc(job.id)}" data-action="${action}">${label}</button>`).join('');
+    return `<tr><td>${jobTitle(job)}${job.final_url?'<small>Employer: '+esc(new URL(job.final_url).hostname)+'</small>':''}</td>
+        <td><span class="pill ${statusClass}">${esc(job.status)}</span>
+        ${job.manual?'<small>Manually marked '+esc(job.manual)+'</small>':''}
+        ${concerns.length?`<details><summary>Job notes</summary>${concerns.map(note=>'<small>'+esc(note)+'</small>').join('')}</details>`:''}</td>
+        <td class="review">${reviewSection('Filled fields',job.filled||[],'No fields recorded as filled.')}
+        ${reviewSection('Unfilled fields',job.missing||[],'No unfilled fields reported.')}</td>
+        <td class="actions">${actions}</td></tr>`;
+}
+function submittedRow(job){
+    const when=job.submitted_at?new Date(job.submitted_at).toLocaleString():'Date unavailable';
+    return `<tr><td>${jobTitle(job)}</td><td>${esc(when)}</td></tr>`;
+}
+let last='';
+async function refresh(){
+    const state=await api('state');
+    $('#mode').textContent=state.mode;
+    $('#accounts').innerHTML=Object.values(state.accounts||{}).map(account=>
+        `<p><a target="_blank" rel="noreferrer" href="${esc(account.site)}">${esc(account.company)}</a> ${esc(account.email)}</p>`
+    ).join('')||'<small>No employer accounts recorded.</small>';
+    const serialized=JSON.stringify(state.jobs);
+    if(serialized===last)return;
+    last=serialized;
+    const submitted=state.jobs.filter(job=>job.manual==='submitted').sort((a,b)=>(b.submitted_at||'').localeCompare(a.submitted_at||''));
+    const active=state.jobs.filter(job=>job.manual!=='submitted');
+    $('#stats').textContent=active.filter(job=>job.status==='Ready for review').length+' ready / '+active.length+' total';
+    $('#submitted-count').textContent='('+submitted.length+')';
+    $('#jobs').innerHTML=active.length?`<table><thead><tr><th>Job</th><th>Status</th><th>Review notes</th><th>Actions</th></tr></thead><tbody>${active.map(workspaceRow).join('')}</tbody></table>`:'<p class="muted">Your batch will appear here.</p>';
+    $('#submitted-jobs').innerHTML=submitted.length?`<table><thead><tr><th>Job</th><th>Marked submitted</th></tr></thead><tbody>${submitted.map(submittedRow).join('')}</tbody></table>`:'<p class="muted">No submitted applications yet.</p>';
+}
+$('#jobs').onclick=act(async event=>{
+    const b=event.target.closest('button[data-action]');
+    if(!b)return;
+    const {id,action}=b.dataset;
+    if(action==='reopen'&&!confirm('Create a new window? Only do this if the saved application window is closed.'))return;
+    if(action==='scan'){
+    scan={id,...await api('job',{id,action:'scan'})};
     const entries=Object.entries(scan.answers);
     if(!entries.length){message('No reusable completed answers found on the current page.');return;}
     $('#learn-items').innerHTML=entries.map(([key,answer])=>'<p><label><input type="checkbox" data-answer value="'+esc(key)+'"> '+esc(answer.label)+(answer.demographic?' (optional disclosure)':'')+' <strong>'+esc(answer.value)+'</strong></label>'+(key==='are you at least 18 years old'?'':'<br><label><input type="checkbox" data-share value="'+esc(key)+'"> Reuse across employers</label>')+'</p>').join('');
     $('#learn-error').hidden=true;
     $('#learning').showModal();
     return;
-}await api('job',{id:b.dataset.id,action:b.dataset.action,country:document.querySelector('[data-country="'+b.dataset.id+'"]').value});await refresh()}));}
+    }
+    b.disabled=true;
+    try{
+        await api('job',{id,action});
+        await refresh();
+        if(action==='submitted')message('Moved to Submitted applications.');
+    }finally{
+        b.disabled=false;
+    }
+});
+
 (async()=>{try{const p=await api('profile');$('#profile').value=JSON.stringify(p.profile,null,2);$('#profile-path').textContent=p.path;await refresh()}catch(e){message(e.message)}})();setInterval(()=>refresh().catch(e=>message(e.message)),2000);
 </script></html>
