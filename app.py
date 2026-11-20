@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Single-user local application. Python 3.10+, no third-party dependencies."""
 from datetime import datetime, timezone
-import argparse, json, os, pathlib, secrets, threading, time, urllib.parse, urllib.request, http.server, signal, sys, fcntl
+import argparse, hashlib, re, subprocess, json, os, pathlib, secrets, threading, time, urllib.parse, urllib.request, http.server, signal, sys, fcntl
 from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile, answer_key, demographic, employer_choice, learnable, preferred_location
 from experience import fill_experience
 from safari import Safari, SafariError
+from review import checklist, queue_followup, review_application
 
 ROOT=pathlib.Path(__file__).resolve().parent
 ENGINE=(ROOT/'engine.js').read_text()
@@ -176,12 +177,117 @@ def scan_answers(fields):
             entry['value'].append(field['label'])
     return {key:value for key,value in candidates.items() if value is not None}
 
+def same_job_page(current,expected):
+    actual, saved = map(urllib.parse.urlsplit, (current,expected))
+    if actual.netloc!=saved.netloc or actual.scheme!=saved.scheme:
+        return False
+    if actual.path in ('/embed/job_app','/embed/job_board'):
+        return actual.path==saved.path and urllib.parse.parse_qs(actual.query).get('token')==urllib.parse.parse_qs(saved.query).get('token') and bool(urllib.parse.parse_qs(saved.query).get('token'))
+    if actual.path.rstrip('/')==saved.path.rstrip('/'):
+        actual_query,saved_query=(urllib.parse.parse_qs(u.query) for u in (actual,saved))
+        for identity in ('gh_jid','jobId','job_id'):
+            if actual_query.get(identity)!=saved_query.get(identity):
+                return False
+        return True
+    pattern=r'^(.*/jobs?/[^/]+)(?:/apply(?:/section/\d+)?)?/?$'
+    left,right=(re.fullmatch(pattern,u.path,re.I) for u in (actual,saved))
+    return bool(left and right and left[1]==right[1])
+
+
 class Runner:
     def __init__(self,store,fixture=False):
         self.store=store;self.browser=Safari();self.fixture=fixture
         self.thread=threading.Thread(target=self.loop,daemon=True);self.thread.start()
+        if not fixture:
+            threading.Thread(target=self.review_loop,daemon=True).start()
+
+    def tab(self,j):
+        known=[j.get(key) for key in ('original_url','last_url','final_url','navigating_to')]
+        candidates=[(i,url) for i,url in enumerate(self.browser.tabs(j['window']),1)
+                    if url and any(target and same_job_page(url,target) for target in known)]
+        if len(candidates)!=1:
+            raise SafariError('FastApply could not uniquely locate this job tab. Close duplicate job tabs or use Reopen tab.')
+        return candidates[0]
+
     def js(self,j,op,payload=None):
-        return self.browser.evaluate(j['window'],ENGINE.replace('__OP__',json.dumps(op)).replace('__PAYLOAD__',json.dumps(payload or {})))
+        script=ENGINE.replace('__OP__',json.dumps(op)).replace('__PAYLOAD__',json.dumps(payload or {}))
+        if not j.get('shared_tab'):
+            return self.browser.evaluate(j['window'],script)
+        index,url=self.tab(j)
+        raw=self.browser.in_tab(j['window'],index,url,'return do JavaScript '+json.dumps(script)+' in tracked')
+        return json.loads(raw) if raw else None
+
+    def navigate(self,j,target):
+        if not j.get('shared_tab'):
+            self.browser.navigate(j['window'],target)
+            return
+        index,url=self.tab(j)
+        self.store.update(j,navigating_to=target)
+        self.browser.in_tab(j['window'],index,url,'set URL of tracked to '+json.dumps(target))
+
+    def focus(self,j):
+        if not j.get('shared_tab'):
+            self.browser.focus(j['window'])
+            return
+        index,url=self.tab(j)
+        self.browser.in_tab(j['window'],index,url,
+            f'set current tab of window id {int(j["window"])} to tracked\nset index of window id {int(j["window"])} to 1\nactivate')
+
+    def review_loop(self):
+        while True:
+            with self.store.lock:
+                jobs=self.store.state['jobs']
+                busy=any(j['status'] in ('Opening','Filling') or
+                         (self.store.state['mode']=='running' and j['status']=='Queued') for j in jobs)
+                job=next((j for j in jobs if not j.get('manual') and j.get('review_pending')),None) if not busy else None
+                if job:
+                    revision=job['review_pending']
+                    self.store.update(job,ai_review={'status':'reviewing'})
+            if not job:
+                time.sleep(.5)
+                continue
+            try:
+                snapshot=self.js(job,'inspect')
+                if not snapshot or snapshot['url']!=job.get('final_url'):
+                    raise ValueError('Return to the prepared form and resume the job.')
+                profile=self.store.profile()
+                profile.setdefault('answers',{}).update(answer_memory(self.store.state,job))
+                rows=checklist(snapshot,profile,job.get('country'))
+                result=review_application(rows,snapshot['final'],len(job.get('missing',[])))
+                if self.js(job,'inspect')['fields']!=snapshot['fields']:
+                    result={'status':'needs_review','findings':['The form changed during AI review. Resume the job to check it again.']}
+            except (ValueError,TypeError,KeyError,SafariError,OSError,subprocess.SubprocessError):
+                result={'status':'unavailable','findings':['AI review could not finish. Check Codex sign-in and resume the job to retry.']}
+            with self.store.lock:
+                if job in self.store.state['jobs'] and job.get('review_pending')==revision:
+                    self.store.update(job,review_pending=None,ai_review=result)
+                else:
+                    continue
+            if result['status']=='needs_review':
+                self.handoff_review(job,result)
+
+    def handoff_review(self,job,result):
+        try:
+            thread=(self.store.path/'review-thread').read_text().strip()
+            if not re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}',thread):
+                return
+        except OSError:
+            return
+        # An unchanged blocker belongs to the same investigation.
+        signature=hashlib.sha256(json.dumps([result['findings'],job.get('missing',[])],sort_keys=True).encode()).hexdigest()
+        with self.store.lock:
+            handoffs=job.setdefault('review_handoffs',[])
+            if job not in self.store.state['jobs'] or job.get('ai_review') is not result or signature in handoffs or len(handoffs)>=3:
+                return
+            self.store.update(job,review_handoffs=handoffs+[signature])
+        try:
+            status=queue_followup(thread,job['id'],ROOT)
+        except (OSError,subprocess.SubprocessError):
+            status='unavailable'
+        with self.store.lock:
+            if job in self.store.state['jobs'] and job.get('ai_review') is result:
+                self.store.update(job,ai_review={**result,'handoff':status})
+
     def checkpoint(self,j):
         with self.store.lock:
             if j not in self.store.state['jobs']:return False
@@ -210,8 +316,8 @@ class Runner:
         if not self.checkpoint(j):return
         if j.get('window'):
             # Require exact previously observed URL; a user-changed tab is never overwritten.
-            try:current=self.browser.location(j['window'])
-            except SafariError:raise ValueError('Saved Safari window is closed. Use Reopen job explicitly to create a replacement.')
+            try:current=self.tab(j)[1] if j.get('shared_tab') else self.browser.location(j['window'])
+            except SafariError:raise ValueError('Saved Safari job page could not be located. Use Reopen tab after checking Safari.')
             if current not in (j['original_url'],j.get('final_url'),j.get('last_url')):
                 # Explicit resume allows user-driven steps on the same employer origin.
                 old=j.get('final_url') or j.get('last_url') or j['original_url']
@@ -222,12 +328,15 @@ class Runner:
             if not safe_url(j['original_url'],self.fixture):raise ValueError('Unsafe or unsupported listing URL.')
             # Persist before automation, and window identity immediately after creation.
             self.store.update(j,opening_pending=True)
-            w=self.browser.open(j['original_url']);self.store.update(j,window=w,opening_pending=False,last_url=j['original_url'])
+            w=self.browser.open_job(j['original_url'],self.store.state.get('safari_job_window'))
+            with self.store.lock:
+                self.store.state['safari_job_window']=w
+                self.store.update(j,window=w,shared_tab=True,opening_pending=False,last_url=j['original_url'])
         entry_pages=set()
         for hop in range(10):
             s=self.snapshot(j)
             if s is None:return
-            self.store.update(j,last_url=s['url'])
+            self.store.update(j,last_url=s['url'],navigating_to=None)
             if not safe_url(s['url'],self.fixture):raise ValueError('Redirect reached an unsupported address. Inspect Safari manually.')
             t=s['text'];host=urllib.parse.urlsplit(s['url']).hostname
             if host not in ('simplify.jobs','www.simplify.jobs'):self.store.update(j,final_url=s['url'])
@@ -249,11 +358,11 @@ class Runner:
                 notes+=['Eligibility requirement: '+str(x) for x in s['simplify'].get('requirements',[]) if __import__('re').search(r'must|graduate|student|citizen|authoriz|sponsor|eligible',str(x),__import__('re').I)]
                 self.store.update(j,listing_concerns=notes)
                 if not self.checkpoint(j):return
-                self.browser.navigate(j['window'],target);time.sleep(.8);continue
+                self.navigate(j,target);time.sleep(.8);continue
             embedded=embedded_application(s)
             if embedded:
                 if not self.checkpoint(j):return
-                self.browser.navigate(j['window'],embedded);time.sleep(.8);continue
+                self.navigate(j,embedded);time.sleep(.8);continue
             if s.get('entry') and s['url'] not in entry_pages:
                 entry_pages.add(s['url'])
                 if not self.checkpoint(j):return
@@ -266,13 +375,13 @@ class Runner:
             if len(candidates)!=1:
                 self.store.update(j,status='Needs input',concerns=['No unique navigational Apply link. Open the employer form manually, then resume. Buttons are not clicked automatically.']);return
             if not self.checkpoint(j):return
-            self.browser.navigate(j['window'],candidates[0]['url']);time.sleep(.6)
+            self.navigate(j,candidates[0]['url']);time.sleep(.6)
         else:raise ValueError('Too many navigation steps; inspect the Safari window.')
         if host in ('simplify.jobs','www.simplify.jobs'):
             # A newsletter/search field must not receive personal profile data.
             candidates=[l for l in s['links'] if l['text'].lower().startswith('apply') and safe_url(l['url'],self.fixture) and urllib.parse.urlsplit(l['url']).hostname not in ('simplify.jobs','www.simplify.jobs')]
             if len(candidates)!=1:raise ValueError('Simplify has no unique external Apply link. Open employer application manually.')
-            self.browser.navigate(j['window'],candidates[0]['url']);time.sleep(.6);s=self.snapshot(j)
+            self.navigate(j,candidates[0]['url']);time.sleep(.6);s=self.snapshot(j)
             if not s:return
         self.store.update(j,status='Filling',final_url=s['url'])
         profile=self.store.profile();filled=list(j.get('filled',[]));concerns=list(j.get('listing_concerns',[]));upload=None
@@ -446,7 +555,8 @@ class Runner:
             # Always surface location/eligibility requirements for user review without excluding any jobs.
             concerns.extend(line[:220] for line in s['text'].splitlines() if __import__('re').search(r'\b(?:must be|must have|eligible|sponsorship|relocation|on.site|work authoriz)',line,__import__('re').I))
             if any(f['type']=='checkbox' and __import__('re').search(r'agree|certify|consent|terms|attest',f['label'],__import__('re').I) and not f['value'] for f in s['fields']):concerns.append('Legal declarations must be completed by you.')
-            self.store.update(j,status='Needs input' if missing or any('submission' in c.lower() for c in concerns) else 'Ready for review',filled=list(dict.fromkeys(filled)),missing=list(dict.fromkeys(missing)),concerns=list(dict.fromkeys(concerns)),last_url=s['url'],final_url=s['url'])
+            self.store.update(j,**({'review_pending':secrets.token_hex(12),'ai_review':{'status':'pending'}} if not self.fixture and s['fields'] else {}),
+                              status='Needs input' if missing or any('submission' in c.lower() for c in concerns) else 'Ready for review',filled=list(dict.fromkeys(filled)),missing=list(dict.fromkeys(missing)),concerns=list(dict.fromkeys(concerns)),last_url=s['url'],final_url=s['url'])
             return
         self.store.update(j,status='Needs input',concerns=['Step limit reached. Continue manually in Safari.'])
 
@@ -533,13 +643,13 @@ def make_handler(store,runner,token,fixture,port):
                         if j['status'] in ('Opening','Filling'):raise ValueError('Pause and wait for the current operation before editing this job.')
                         if action=='focus':
                             if not j.get('window'):raise ValueError('No Safari window opened yet')
-                            runner.browser.focus(j['window'])
+                            runner.focus(j)
                         elif action in ('resume','reopen'):
                             if action=='reopen':
-                                j.update(window=None,opening_pending=False,protected_fields=[])
+                                j.update(window=None,opening_pending=False,protected_fields=[],navigating_to=None)
                                 j.pop('learning_baselines',None)
                             if j.get('opening_pending'):raise ValueError('Interrupted during window creation. Inspect Safari first, then explicitly Reopen if needed.')
-                            j['manual']=None
+                            j.update(manual=None,review_pending=None,ai_review=None)
                             j['country']=body.get('country') or j.get('country');j['status']='Queued';j['missing']=[];j['concerns']=[];store.state['mode']='running'
                         elif action in ('scan','learn'):
                             if not j.get('window'):raise ValueError('Open the employer application first.')
@@ -580,6 +690,14 @@ def make_handler(store,runner,token,fixture,port):
                             if not host:raise ValueError('Open the employer site first.')
                             accounts=store.state.setdefault('accounts',{})
                             accounts[host]={'company':j['company'],'site':'https://'+host,'email':store.profile().get('email') or ''}
+                        elif action=='review-log':
+                            event=body.get('event')
+                            if event not in ('app_update','manual_fill'):
+                                raise ValueError('Choose an app update or a manually filled field.')
+                            notes=body.get('notes')
+                            if not isinstance(notes,list) or not notes or len(notes)>25 or any(not isinstance(note,str) or not note.strip() or len(note)>300 for note in notes):
+                                raise ValueError('Provide the changes or field names to record.')
+                            j.setdefault('review_log',[]).append({'event':event,'notes':notes})
                         elif action=='submitted':
                             j['manual']='submitted'
                             j.setdefault('submitted_at',datetime.now(timezone.utc).isoformat())

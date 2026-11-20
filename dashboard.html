@@ -62,6 +62,8 @@ a:hover{color:var(--pink)}
 .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .pill.ready{color:var(--purple);background:#241737;border-color:#503269}
 #mode{color:var(--pink);background:#2d1329;border-color:#643252}
+.ai-state{display:block;margin-top:6px;color:var(--purple);font:11px var(--mono)}
+.ai-state.reviewed{color:var(--pink)}
 .pill.needs{color:var(--warn);background:#2a2117;border-color:#4d3824}
 details{margin:5px 0}
 summary{cursor:pointer;color:var(--text);font-size:13px}
@@ -322,14 +324,25 @@ function reviewSection(title, items, empty){
 }
 const jobActions=[
     ['focus','Focus Safari'],['resume','Resume job'],['scan','Scan and learn answers'],
-    ['reopen','Reopen closed window'],['submitted','Mark submitted'],['remove','Remove']
+    ['reopen','Reopen tab'],['submitted','Mark submitted'],['remove','Remove']
 ];
 function workspaceRow(job){
-    const statusClass=job.status==='Ready for review'?'ready':job.status==='Needs input'?'needs':'';
-    const concerns=job.concerns||[];
+    const review=job.ai_review;
+    let status=job.status;
+    if(status==='Ready for review' && review && review.status!=='reviewed'){
+        status=review.status==='needs_review'?'Needs review':'Autofill complete';
+    }
+    const statusClass=status==='Ready for review'?'ready':['Needs input','Needs review'].includes(status)?'needs':'';
+
+    const aiLabels={pending:'AI review queued',reviewing:'AI reviewing',reviewed:'AI reviewed · Ready for you',needs_review:'AI found items to review',unavailable:'AI review unavailable'};
+    const aiBadge=review&&aiLabels[review.status]?`<small class="ai-state ${esc(review.status)}">${aiLabels[review.status]}</small>`:'';
+    const handoffNotes={sent:'Follow-up sent to Codex',queued:'Follow-up queued in Codex',unavailable:'Codex follow-up could not be queued'};
+    const handoff=handoffNotes[review?.handoff];
+    const changes=(job.review_log||[]).flatMap(entry=>entry.notes.map(note=>(entry.event==='app_update'?'App updated: ':'AI filled: ')+note));
+    const concerns=[...(job.concerns||[]),...(review?.findings||[]),...(handoff?[handoff]:[]),...changes];
     const actions=jobActions.map(([action,label])=>`<button data-id="${esc(job.id)}" data-action="${action}">${label}</button>`).join('');
     return `<tr><td>${jobTitle(job)}${job.final_url?'<small>Employer: '+esc(new URL(job.final_url).hostname)+'</small>':''}</td>
-        <td><span class="pill ${statusClass}">${esc(job.status)}</span>
+        <td><span class="pill ${statusClass}">${esc(status)}</span>${aiBadge}
         ${job.manual?'<small>Manually marked '+esc(job.manual)+'</small>':''}
         <details ${concerns.length?'':'hidden'}><summary>Job notes</summary><div>${concerns.map(note=>'<small>'+esc(note)+'</small>').join('')}</div></details></td>
         <td class="review">${reviewSection('Filled fields',job.filled||[],'No fields recorded as filled.')}
@@ -375,7 +388,11 @@ function updateWorkspace(jobs){
                 if(title.innerHTML!==nextTitle.innerHTML)title.innerHTML=nextTitle.innerHTML;
                 const pill=status.querySelector('.pill'), nextPill=nextStatus.querySelector('.pill');
                 if(!pill.isEqualNode(nextPill))pill.replaceWith(nextPill);
-                const manual=status.querySelector(':scope > small'), nextManual=nextStatus.querySelector(':scope > small');
+                const aiState=status.querySelector('.ai-state'), nextAiState=nextStatus.querySelector('.ai-state');
+                if(aiState && !nextAiState)aiState.remove();
+                else if(aiState && !aiState.isEqualNode(nextAiState))aiState.replaceWith(nextAiState);
+                else if(!aiState && nextAiState)status.querySelector('.pill').after(nextAiState);
+                const manual=status.querySelector(':scope > small:not(.ai-state)'), nextManual=nextStatus.querySelector(':scope > small:not(.ai-state)');
                 if(manual && !nextManual)manual.remove();
                 else if(!manual && nextManual)status.insertBefore(nextManual,status.querySelector('details'));
                 else if(manual && nextManual && manual.textContent!==nextManual.textContent)manual.textContent=nextManual.textContent;
@@ -405,7 +422,7 @@ async function refresh(){
     }
     const submitted=state.jobs.filter(job=>job.manual==='submitted').sort((a,b)=>(b.submitted_at||'').localeCompare(a.submitted_at||''));
     const active=state.jobs.filter(job=>job.manual!=='submitted');
-    $('#stats').textContent=active.filter(job=>job.status==='Ready for review').length+' ready / '+active.length+' total';
+    $('#stats').textContent=active.filter(job=>job.status==='Ready for review' && (!job.ai_review || job.ai_review.status==='reviewed')).length+' ready / '+active.length+' total';
     $('#submitted-count').textContent='('+submitted.length+')';
     updateWorkspace(active);
     const submittedMarkup=submitted.map(submittedRow).join('');
@@ -418,7 +435,7 @@ $('#jobs').onclick=act(async event=>{
     const b=event.target.closest('button[data-action]');
     if(!b)return;
     const {id,action}=b.dataset;
-    if(action==='reopen'&&!confirm('Create a new window? Only do this if the saved application window is closed.'))return;
+    if(action==='reopen'&&!confirm('Open a fresh tab for this job? Use this when the original tab is closed.'))return;
     b.disabled=true;
     try{
         if(action==='scan'){

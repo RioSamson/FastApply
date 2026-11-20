@@ -39,3 +39,37 @@ class Safari:
 
     def focus(self, window):
         self.script('tell application "Safari"\nset index of window id '+str(int(window))+' to 1\nactivate\nend tell')
+
+    def tabs(self, window):
+        # Use explicit positions only within a single Apple Event. Safari exposes no persistent tab ID.
+        script = f'''tell application "Safari"
+set output to ""
+repeat with t in tabs of window id {int(window)}
+    set u to URL of t
+    if u is missing value then set u to ""
+    set output to output & u & linefeed
+end repeat
+return output
+end tell'''
+        return self.script(script).split('\n')
+
+    def open_job(self, url, window=None):
+        if window is not None:
+            try:
+                self.script(f'tell application "Safari" to count tabs of window id {int(window)}')
+            except SafariError:
+                window=None
+        if window is None:
+            return self.open(url)
+        self.script(f'''tell application "Safari"
+tell window id {int(window)} to make new tab at end of tabs with properties {{URL:{json.dumps(url)}}}
+end tell''')
+        return window
+
+    def in_tab(self, window, index, expected_url, command):
+        script=f'''tell application "Safari"
+set tracked to tab {int(index)} of window id {int(window)}
+if URL of tracked is not {json.dumps(expected_url)} then error "Job tab moved"
+{command}
+end tell'''
+        return self.script(script)
