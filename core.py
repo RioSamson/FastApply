@@ -100,6 +100,11 @@ def plan(fields,profile,country=None):
         label=f['label']; n=answer_key(label); value=None
         question=f.get('question') or label
         if f.get('groupAnswered'):continue
+        if f.get('choiceGroup'):
+            answer=profile.get('answers',{}).get(answer_key(question),{}).get('value')
+            if isinstance(answer,list) and any(norm(label)==norm(option) for option in answer if isinstance(option,str)) and learnable(question):
+                answers.append({'id':f['id'],'checked':True})
+            continue
         if f['value']:continue
         if LEGAL.search(label) or LEGAL.search(question):missing.append(label+': review and act yourself');continue
         # An individually approved response takes precedence over the general blank preference.

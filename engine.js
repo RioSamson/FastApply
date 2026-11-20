@@ -9,6 +9,7 @@
     const title=norm(wrapper?.innerText.split('\n')[0]);
     return /^r\u00e9sum\u00e9\*?$/i.test(title)?'Resume':title==='Cover letter'?'Cover letter':'';
   }
+  const greenhouse = ['job-boards.greenhouse.io','boards.greenhouse.io'].includes(location.hostname);
   const rippling = location.hostname==='ats.rippling.com' ||
     (location.hostname==='127.0.0.1' && document.documentElement.dataset.jobprepFixture==='rippling-learning');
   const labelledBy = e => norm((e.getAttribute('aria-labelledby') || '').split(/\s+/)
@@ -28,7 +29,7 @@
     return /^select(?:\s*\u2026|\.*)?$/i.test(text) ? '' : text;
   }
 
-  const elements = () => { document.querySelectorAll('[data-jobprep-id]').forEach(e=>e.removeAttribute('data-jobprep-id')); return [...document.querySelectorAll('input,select,textarea,[role="combobox"],button[type=button][role=radio]')].filter(e => (visible(e)||ripplingFile(e)) && !e.closest('.ashby-application-form-autofill-pane,.ashby-application-form-autofill-uploader') && !e.disabled && (e.matches('button[role=radio]') || !['hidden','submit','button','reset'].includes(e.type))); };
+  const elements = () => { document.querySelectorAll('[data-jobprep-id]').forEach(e=>e.removeAttribute('data-jobprep-id')); return [...document.querySelectorAll('input,select,textarea,[role="combobox"],button[type=button][role=radio]')].filter(e => (visible(e)||ripplingFile(e)) && !e.closest('.ashby-application-form-autofill-pane,.ashby-application-form-autofill-uploader') && !e.disabled && e.getAttribute('aria-hidden')!=='true' && (e.matches('button[role=radio]') || !['hidden','submit','button','reset'].includes(e.type))); };
   const field = (e,i) => {
     e.dataset.jobprepId = String(i);
     const section = e.closest('fieldset');
@@ -41,11 +42,12 @@
     const selection=e.closest('.select__value-container')?.querySelector('.select__single-value')?.innerText;
     const pill=e.matches('button[role=radio]');
     const radioGroup=(pill || e.type==='radio') && (e.closest('[role=radiogroup]')||section||wrapper);
-    const question=radioGroup ? norm(document.getElementById(radioGroup.getAttribute('aria-labelledby'))?.innerText || radioGroup.getAttribute('aria-label') || radioGroup.querySelector('legend')?.innerText || heading?.innerText) : '';
+    const choiceGroup=greenhouse && e.type==='checkbox' && section?.classList.contains('checkbox') && !!e.name;
+    const question=choiceGroup ? norm(section.querySelector('legend')?.innerText) : radioGroup ? norm(document.getElementById(radioGroup.getAttribute('aria-labelledby'))?.innerText || radioGroup.getAttribute('aria-label') || radioGroup.querySelector('legend')?.innerText || heading?.innerText) : '';
     const siblingsInGroup=e.type==='radio' && e.name ? [...(e.form||document).querySelectorAll('input[type=radio]')].filter(r=>r.name===e.name && r.form===e.form) : [];
-    return {question,groupAnswered:pill ? !!radioGroup?.querySelector('[aria-checked=true]') : siblingsInGroup.some(r=>r.checked),selectedLabel:ripplingSelection || e.selectedOptions?.[0]?.text || selection || e.getAttribute('aria-valuetext') || '',attached:!!ripplingReceipt || !!attached || (ripplingFile(e)==='Resume' && !!e.files.length && /Total 1 file selected/i.test(e.parentElement.parentElement.innerText) && e.parentElement.parentElement.innerText.includes(e.files[0].name)),manual:e.dataset.fastapplyManual==='yes',ashbyQuestion:!!wrapper && e.tagName==='TEXTAREA',id:String(i),label:label(e),type:pill ? 'radio' : e.getAttribute('role')==='combobox' ? 'combobox' : e.type || e.getAttribute('role'),tag:e.tagName,required:ripplingFile(e)==='Resume' || e.required || e.getAttribute('aria-required')==='true', value:pill ? (e.getAttribute('aria-checked')==='true' ? label(e) : '') : e.type==='file' ? (ripplingReceipt?.[1] || [...e.files].map(f=>f.name).join(', ')) : e.type==='radio'||e.type==='checkbox' ? (e.checked ? e.value : '') : ripplingSelection!==null ? ripplingSelection : e.closest('.select__value-container') ? selection || '' : e.value || e.getAttribute('aria-valuetext') || '',
+    return {question,choiceGroup,groupAnswered:choiceGroup ? [...section.querySelectorAll('input[type=checkbox]')].some(c=>c.checked) :pill ? !!radioGroup?.querySelector('[aria-checked=true]') : siblingsInGroup.some(r=>r.checked),selectedLabel:ripplingSelection || e.selectedOptions?.[0]?.text || selection || e.getAttribute('aria-valuetext') || '',attached:!!ripplingReceipt || !!attached || (ripplingFile(e)==='Resume' && !!e.files.length && /Total 1 file selected/i.test(e.parentElement.parentElement.innerText) && e.parentElement.parentElement.innerText.includes(e.files[0].name)),manual:e.dataset.fastapplyManual==='yes',ashbyQuestion:!!wrapper && e.tagName==='TEXTAREA',id:String(i),label:label(e),type:pill ? 'radio' : e.getAttribute('role')==='combobox' ? 'combobox' : e.type || e.getAttribute('role'),tag:e.tagName,required:ripplingFile(e)==='Resume' || e.required || e.getAttribute('aria-required')==='true', value:pill ? (e.getAttribute('aria-checked')==='true' ? label(e) : '') : e.type==='file' ? (ripplingReceipt?.[1] || [...e.files].map(f=>f.name).join(', ')) : e.type==='radio'||e.type==='checkbox' ? (e.checked ? e.value : '') : ripplingSelection!==null ? ripplingSelection : e.closest('.select__value-container') ? selection || '' : e.value || e.getAttribute('aria-valuetext') || '',
       option:pill ? label(e) : e.value, section:norm(section?.querySelector('legend')?.innerText), sectionIndex:siblings.indexOf(section),
-      options:e.options ? [...e.options].map(o=>({value:o.value,label:o.text,disabled:o.disabled})) : [], invalid:e.getAttribute('aria-invalid')==='true' || (e.validity ? !e.validity.valid : false), validation:e.validationMessage || ''};
+      options:e.options ? [...e.options].map(o=>({value:o.value,label:o.text,disabled:o.disabled})) : [], invalid:e.getAttribute('aria-invalid')==='true' || (!choiceGroup && e.validity ? !e.validity.valid : false), validation:e.validationMessage || ''};
   };
   const simplify = () => {
     if(!['simplify.jobs','www.simplify.jobs'].includes(location.hostname)) return null;
@@ -165,11 +167,19 @@
       if(choices.length===1){choices[0].click();if(choices[0].checked)filled.push('Terms and conditions');}
     }
     if(op==='entry' && payload.url===location.href) entryButton()?.click();
-    if(op==='custom-open' || op==='custom-select') {
+    if(op==='custom-open' || op==='custom-select' || op==='custom-close') {
       const e=document.querySelector('[data-jobprep-id="'+payload.id+'"]');
       const list=e && document.getElementById(e.getAttribute('aria-controls') || e.getAttribute('aria-owns') || (e.closest('.select__control') && 'react-select-'+e.id+'-listbox'));
       const oracleGrid=e?.classList.contains('cx-select-input') && e.getAttribute('aria-haspopup')==='grid' && (location.hostname.endsWith('.oraclecloud.com') || experiencePage());
-      if(oracleGrid && op==='custom-open'){
+      const greenhouseControl=greenhouse && e?.closest('.select-shell') && e.closest('.select__control');
+      if(greenhouseControl && op==='custom-open'){
+        e.focus();
+        const toggle=greenhouseControl.querySelector('button[type=button][aria-label="Toggle flyout"]');
+        if(e.getAttribute('aria-expanded')!=='true')toggle?.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,button:0}));
+      }else if(op==='custom-close'){
+        if(greenhouseControl && e.getAttribute('aria-expanded')==='true')
+          e.dispatchEvent(new KeyboardEvent('keyup',{key:'Escape',code:'Escape',bubbles:true}));
+      }else if(oracleGrid && op==='custom-open'){
         e.focus();
         if(e.getAttribute('aria-expanded')!=='true')document.getElementById(e.id+'-toggle-button')?.click();
         Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,String(payload.value));
@@ -187,8 +197,8 @@
         }else if(e.getAttribute('aria-expanded')!=='true')e.click();
       }
       else {
-        const matches=[...list.querySelectorAll(oracleGrid?'[role="gridcell"]':'[role="option"]')].filter(o=>visible(o)&&o.getAttribute('aria-disabled')!=='true'&&([payload.value,...(oracleGrid ? payload.aliases || [] : [])].some(v=>norm(o.innerText).toLowerCase()===String(v).toLowerCase()) || (e.id==='country' && norm(o.innerText).replace(/\s*\(\+?[\d -]+\)$/, '').toLowerCase()===String(payload.value).toLowerCase())) && (o.tagName!=='BUTTON'||o.type==='button'));
-        if(matches.length===1){matches[0].click();filled.push(label(e));}else issues.push('No unique custom dropdown option; select manually.');
+        const matches=[...list.querySelectorAll(oracleGrid?'[role="gridcell"]':'[role="option"]')].filter(o=>visible(o)&&o.getAttribute('aria-disabled')!=='true'&&([payload.value,...(oracleGrid ? payload.aliases || [] : [])].some(v=>norm(o.innerText).toLowerCase()===String(v).toLowerCase()) || (e.id==='country' && norm(o.innerText).replace(/\s+(?:\(\+?[\d -]+\)|\+\d[\d -]*)$/, '').toLowerCase()===String(payload.value).toLowerCase())) && (o.tagName!=='BUTTON'||o.type==='button'));
+        if(matches.length===1){matches[0].click();filled.push(label(e));}else issues.push('No matching dropdown option; select manually.');
       }
     }
     if(op==='fill') for(const a of payload.answers || []) {

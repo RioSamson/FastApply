@@ -85,6 +85,19 @@ def scan_answers(fields):
             entry['demographic']=True
         if key not in candidates:candidates[key]=entry
         elif candidates[key]!=entry:candidates[key]=None
+    for field in fields:
+        if not field.get('choiceGroup') or not field['value'] or not learnable(field['question']):
+            continue
+        label=field['question']
+        key=answer_key(label)
+        if key not in candidates:
+            candidates[key]={'label':label,'value':[]}
+        entry=candidates[key]
+        if not entry or not isinstance(entry['value'],list):
+            candidates[key]=None
+            continue
+        if field['label'] not in entry['value']:
+            entry['value'].append(field['label'])
     return {key:value for key,value in candidates.items() if value is not None}
 
 class Runner:
@@ -290,7 +303,10 @@ class Runner:
                     time.sleep(.2)
                     cr=self.js(j,'custom-select',answer)
                     if cr['filled']:break
-                filled.extend(cr['filled']);concerns.extend(cr['issues'])
+                if not cr['filled']:
+                    self.js(j,'custom-close',answer)
+                filled.extend(cr['filled'])
+                concerns.extend(fields_by_id[answer['id']]['label']+': '+issue for issue in cr['issues'])
                 time.sleep(.25)
                 break
             else:
@@ -313,6 +329,9 @@ class Runner:
                 if not s:return
             missing=[]
             for f in s['fields']:
+                if f.get('choiceGroup'):
+                    if f['required'] and not f['groupAnswered']:missing.append(f['question']+': choose at least one answer.')
+                    continue
                 if (f['required'] and not f['value'] and f['type']!='radio') or (f.get('invalid') and (f['required'] or f['value'])):missing.append(f['label']+(': '+f['validation'] if f.get('validation') else ': required answer missing'))
                 if f.get('ashbyQuestion') and not f['value']:missing.append(f['label']+': review written question')
                 if f['type']=='combobox' and f['required'] and not f['value']:missing.append(f['label']+': verify custom selection manually')
