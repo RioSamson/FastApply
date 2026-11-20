@@ -71,7 +71,22 @@ def answer_key(label):
 def demographic(label):
     return bool(re.search(r'gender|ethnic|race|hispanic|latino|veteran|military|disabil|sexual|pronoun',label,re.I))
 
+def employer_choice(label):
+    # Yes/no answers approved for the same employer and exact question.
+    key=answer_key(label)
+    if key=='if you provided a phone number do you consent to receiving followup communication via text message or sms message regarding your application status':
+        return 'sms'
+    if key in {
+        'are you legally authorized to work in canada',
+        'do you now or in the future require sponsorship to work in canada',
+    }:
+        return 'eligibility'
+    return None
+
+
 def learnable(label):
+    if employer_choice(label):
+        return True
     if answer_key(label) in {'select', 'search', 'textbox', 'combobox', 'choose'}:
         return False
     if LEGAL.search(label) or re.search(r'password|verification|one time|security code|social security|\bssn\b|passport|bank|tax id|pin code|secret|credential|birth|religion',label,re.I):
@@ -106,10 +121,16 @@ def plan(fields,profile,country=None):
                 answers.append({'id':f['id'],'checked':True})
             continue
         if f['value']:continue
-        if LEGAL.search(label) or LEGAL.search(question):missing.append(label+': review and act yourself');continue
-        # An individually approved response takes precedence over the general blank preference.
         answer=profile.get('answers',{}).get(answer_key(question))
-        if demographic(question):
+        approved=employer_choice(question) and isinstance(answer,dict) and answer.get('employer_choice_approved') is True
+        if LEGAL.search(label) or LEGAL.search(question):
+            if not (approved and employer_choice(question)=='sms' and f['type'] in ('combobox','select-one')):
+                missing.append(label+': review and act yourself')
+                continue
+        if approved:
+            if str(answer.get('value','')).casefold() in ('yes','no'):
+                value=answer['value']
+        elif demographic(question):
             if not isinstance(answer,dict) or answer.get('demographic_approved') is not True:
                 continue
             value=answer.get('value')
@@ -159,7 +180,10 @@ def plan(fields,profile,country=None):
                     choice['aliases']=[locality if n=='city' else str(value)+', '+locality]
                 answers.append(choice)
                 continue
-            answers.append({'id':f['id'],'value':value})
+            entry={'id':f['id'],'value':value}
+            if approved and employer_choice(question)=='sms':
+                entry['sms_choice']=True
+            answers.append(entry)
         elif f['required'] and f['type']!='file':missing.append(label+': no applicable saved answer')
     return {'answers':answers,'missing':missing}
 

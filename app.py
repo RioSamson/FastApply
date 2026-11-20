@@ -2,7 +2,7 @@
 """Single-user local application. Python 3.10+, no third-party dependencies."""
 from datetime import datetime, timezone
 import argparse, json, os, pathlib, secrets, threading, time, urllib.parse, urllib.request, http.server, signal, sys, fcntl
-from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile, answer_key, demographic, learnable, preferred_location
+from core import extract, plan, resume, safe_url, simplify_target, embedded_application, validate_resume, validate_profile, answer_key, demographic, employer_choice, learnable, preferred_location
 from experience import fill_experience
 from safari import Safari, SafariError
 
@@ -64,7 +64,8 @@ def answer_scope(job):
 
 def answer_memory(state, job):
     memory=state.get('learned_answers',{})
-    return {**memory.get('shared',{}), **memory.get(answer_scope(job),{})}
+    shared={key:value for key,value in memory.get('shared',{}).items() if not employer_choice(key)}
+    return {**shared, **memory.get(answer_scope(job),{})}
 
 
 def page_key(snapshot):
@@ -106,8 +107,8 @@ def scan_changes(store,job,snapshot):
         if stored is None and key in predicted and equal_answer(value,predicted[key]['value']) and old_value is None:
             continue
         previous=stored if stored is not None else old_value
-        scope='shared' if key=='are you at least 18 years old' or (
-            key not in employer_memory and key in memory.get('shared',{})) else 'employer'
+        scope='shared' if not entry.get('employer_choice') and (key=='are you at least 18 years old' or (
+            key not in employer_memory and key in memory.get('shared',{}))) else 'employer'
         changes[key]={**entry,'kind':'update' if previous is not None else 'new','scope':scope}
         if previous is not None:
             changes[key]['previous']=previous
@@ -150,11 +151,14 @@ def scan_answers(fields):
         if field.get('invalid') or not label or not field['value'] or not value or kind not in allowed or not learnable(label):
             continue
         key=answer_key(label)
-        if key=='are you at least 18 years old' and value.strip().casefold() not in ('yes','no'):
+        exclusive=employer_choice(label)
+        if (exclusive or key=='are you at least 18 years old') and str(value).strip().casefold() not in ('yes','no'):
             continue
         entry={'label':label,'value':str(value)[:4000]}
         if demographic(label):
             entry['demographic']=True
+        if exclusive:
+            entry['employer_choice']=exclusive
         if key not in candidates:candidates[key]=entry
         elif candidates[key]!=entry:candidates[key]=None
     for field in fields:
@@ -417,7 +421,6 @@ class Runner:
                     continue
                 if (f['required'] and not f['value'] and f['type']!='radio') or (f.get('invalid') and (f['required'] or f['value'])):missing.append(f['label']+(': '+f['validation'] if f.get('validation') else ': required answer missing'))
                 if f.get('ashbyQuestion') and not f['value']:missing.append(f['label']+': review written question')
-                if f['type']=='combobox' and f['required'] and not f['value']:missing.append(f['label']+': verify custom selection manually')
                 if f['type']=='file' and f['required'] and not f['value'] and not __import__('re').search(r'resume|\bcv\b',f['label'],__import__('re').I):missing.append((f['label'] or 'Document upload')+': unrecognized upload control; verify document requirement manually')
                 if f['type']=='file' and f['value']:
                     # An accepted/uploaded receipt mentioning the document is needed, not only input.files.
@@ -549,6 +552,13 @@ def make_handler(store,runner,token,fixture,port):
                                     # Set the reference on older or manually reached pages without accepting answers.
                                     record_learning_baseline(store,j,snap,
                                                              exclude=candidates)
+                                if page_key(snap) in {j.get('last_url'),j.get('final_url')}:
+                                    resolved={field['label']+suffix
+                                              for field in snap['fields'] if field['value'] and not field.get('invalid')
+                                              for suffix in (': required answer missing', ': verify custom selection manually')}
+                                    remaining=[note for note in j.get('missing',[]) if note not in resolved]
+                                    if remaining!=j.get('missing',[]):
+                                        store.update(j,missing=remaining)
                                 return self.send({'answers':candidates})
                             shown=body.get('answers',{})
                             if not isinstance(shown,dict) or any(entry!=candidates.get(key) for key,entry in shown.items()):
@@ -559,6 +569,8 @@ def make_handler(store,runner,token,fixture,port):
                                 saved={'value':entry['value']}
                                 if entry.get('demographic'):
                                     saved['demographic_approved']=True
+                                if entry.get('employer_choice'):
+                                    saved['employer_choice_approved']=True
                                 learned.setdefault(scope,{})[key]=saved
                                 j.setdefault('learning_baselines',{}).setdefault(page_key(snap),{})[key]=entry['value']
                             store.save()

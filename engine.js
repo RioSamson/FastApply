@@ -225,7 +225,9 @@
     if(op==='fill') for(const a of payload.answers || []) {
       const e = document.querySelector('[data-jobprep-id="'+a.id+'"]');
       if(!e || !visible(e) || e.disabled || e.readOnly) continue;
-      if(/agree|accept|acknowledge|confirm|certify|consent|signature|declaration|terms|attest|privacy|policy/i.test(label(e))) {issues.push('Legal declaration requires your action.');continue;}
+      const smsChoice=a.sms_choice===true && e.tagName==='SELECT' &&
+        /if you provided a phone number, do you consent to receiving follow-up communication via text message \(or SMS message\) regarding your application status\?/i.test(label(e));
+      if(!smsChoice && /agree|accept|acknowledge|confirm|certify|consent|signature|declaration|terms|attest|privacy|policy/i.test(label(e))) {issues.push('Legal declaration requires your action.');continue;}
       if(e.matches('button[type=button][role=radio]')){
         const group=e.closest('[role=radiogroup]');
         if(a.checked && group && !group.querySelector('[aria-checked=true]') && !e.matches('[aria-disabled=true]')){

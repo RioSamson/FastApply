@@ -72,7 +72,9 @@ details ul{margin:5px 0;padding-left:20px}
 .actions .controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
 .actions button[data-action=submitted]{color:var(--pink)}
 .actions button[data-action=remove]{color:#eeaaa5}
-#message:not(:empty){margin:0 0 12px;padding:8px 12px;border:1px solid #703861;border-radius:6px;background:#291225;color:#ffb4e4}
+#message{position:fixed;z-index:10;max-width:min(340px,calc(100vw - 24px));padding:9px 13px;border:1px solid #784b87;border-radius:8px;background:#26172f;color:#f1ddff;box-shadow:0 8px 24px #0008;pointer-events:none;overflow-wrap:anywhere}
+#message[data-tone=error]{border-color:#8c5266;background:#301623;color:#ffd5e0}
+#message.unanchored{inset:auto 12px 16px auto}
 #learning{width:min(1120px,calc(100vw - 32px));max-height:min(82dvh,760px);color:var(--text);background:var(--panel);border:1px solid #66447b;border-radius:14px;padding:0;overflow:hidden}
 #learning::backdrop{background:#000c}
 #learning form{display:flex;flex-direction:column;max-height:min(82dvh,760px)}
@@ -111,7 +113,7 @@ details ul{margin:5px 0;padding-left:20px}
         <circle class="circuit" cx="28" cy="28" r="2"/>
     </svg>
 </span><h1>FastApply</h1></div><span id="mode" class="pill" role="status" hidden>Running</span></header>
-<div id="message" role="status"></div>
+<div id="message" role="status" aria-atomic="true" hidden></div>
 <nav class="view-tabs" aria-label="Application views">
 <a href="?view=workspace" data-view="workspace">Application workspace</a>
 <a href="?view=submitted" data-view="submitted">Submitted applications <span id="submitted-count"></span></a>
@@ -160,9 +162,38 @@ details ul{margin:5px 0;padding-left:20px}
 <script>
 const $=s=>document.querySelector(s),token=new URLSearchParams(location.hash.slice(1)).get('token')||sessionStorage.getItem('jobprep-token');if(token)sessionStorage.setItem('jobprep-token',token);history.replaceState(null,'',location.pathname+location.search);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function message(s){$('#message').textContent=s;}
+let noticeAnchor=null, noticeTimeout;
+function positionNotice(){
+    const notice=$('#message');
+    if(notice.hidden)return;
+    const rect=noticeAnchor?.isConnected?noticeAnchor.getBoundingClientRect():null;
+    const beside=rect && rect.bottom>0 && rect.top<window.innerHeight && rect.right>0 && rect.left<window.innerWidth;
+    notice.classList.toggle('unanchored',!beside);
+    notice.style.left='';
+    notice.style.top='';
+    if(!beside)return;
+    const width=notice.offsetWidth,height=notice.offsetHeight,edge=12,gap=8;
+    notice.style.left=Math.max(edge,Math.min(rect.right-width,window.innerWidth-width-edge))+'px';
+    const top=rect.bottom+height+gap<=window.innerHeight-edge?rect.bottom+gap:rect.top-height-gap;
+    notice.style.top=Math.max(edge,top)+'px';
+}
+function message(text,anchor=null,tone='info'){
+    const notice=$('#message');
+    clearTimeout(noticeTimeout);
+    noticeAnchor=anchor;
+    notice.dataset.tone=tone;
+    notice.hidden=false;
+    notice.textContent=text;
+    positionNotice();
+    noticeTimeout=setTimeout(()=>{notice.hidden=true;notice.textContent='';},tone==='error'?6500:4200);
+}
+window.addEventListener('scroll',positionNotice,{capture:true,passive:true});
+window.addEventListener('resize',positionNotice);
 async function api(path,body){const r=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers:{'X-JobPrep-Token':token,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const v=await r.json();if(!r.ok)throw Error(v.error);return v}
-const act=f=>async(...args)=>{try{await f(...args)}catch(e){message(e.message)}};
+const act=f=>async(...args)=>{
+    const anchor=args[0]?.target?.closest?.('button');
+    try{await f(...args)}catch(e){message(e.message,anchor,'error')}
+};
 // Read both clipboard representations during the user's paste gesture.
 // Parse HTML in an inert template: never insert clipboard HTML into the live page.
 function emailClipboardText(html, plain) {
@@ -221,7 +252,7 @@ $('#passwords').onclick=act(async()=>{await api('passwords',{})});
 let scan=null;
 function answerText(value){return esc(Array.isArray(value)?value.join(', '):value);}
 function answerCard(key,answer){
-    const badges=[answer.scope==='shared'?'Across employers':'',answer.demographic?'Optional disclosure':''].filter(Boolean);
+    const badges=[answer.scope==='shared'?'Across employers':'',answer.demographic?'Optional disclosure':'',answer.employer_choice?'This employer only':''].filter(Boolean);
     return `<label class="learn-choice ${answer.kind}">
         <input type="checkbox" data-answer value="${esc(key)}">
         <span><strong>${esc(answer.label)}</strong>
@@ -253,7 +284,7 @@ $('#save-answers').onclick=async()=>{
         if(!Object.keys(selected).length)throw new Error('Select at least one answer to save.');
         const result=await api('job',{id:scan.id,action:'learn',answers:selected});
         $('#learning').close();
-        message(result.saved+' answers saved for future applications.');
+        message(result.saved+' answers saved.',scan.anchor);
     }catch(e){
         error.textContent=e.message;
         error.hidden=false;
@@ -388,19 +419,20 @@ $('#jobs').onclick=act(async event=>{
     if(!b)return;
     const {id,action}=b.dataset;
     if(action==='reopen'&&!confirm('Create a new window? Only do this if the saved application window is closed.'))return;
-    if(action==='scan'){
-    scan={id,...await api('job',{id,action:'scan'})};
-    if(!Object.keys(scan.answers).length){message('No new or changed answers.');return;}
-    renderAnswerChanges(scan.answers);
-    $('#learn-error').hidden=true;
-    $('#learning').showModal();
-    return;
-    }
     b.disabled=true;
     try{
+        if(action==='scan'){
+            scan={id,anchor:b,...await api('job',{id,action})};
+            if(!Object.keys(scan.answers).length){message('No new or changed answers.',b);return;}
+            $('#message').hidden=true;
+            renderAnswerChanges(scan.answers);
+            $('#learn-error').hidden=true;
+            $('#learning').showModal();
+            return;
+        }
         await api('job',{id,action});
         await refresh();
-        if(action==='submitted')message('Moved to Submitted applications.');
+        if(action==='submitted')message('Moved to Submitted applications.',b);
     }finally{
         b.disabled=false;
     }
